@@ -14,6 +14,7 @@ aseqview_SOURCES = \
 aseqview_LDADD = @GTK_LIBS@
 
 EXTRA_DIST = \
+	$(man_MANS) \
 	bitmaps/gm.xbm bitmaps/gs.xbm bitmaps/xg.xbm etc/aseqview.spec.in \
 	etc/aseqview.spec.in
 
