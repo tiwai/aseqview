@@ -39,7 +39,7 @@
 #define MAX_MIDI_VALS	128
 #define PROG_NAME_LEN	8
 
-#if SND_LIB_MINOR <= 5
+#if SND_LIB_MAJOR == 0 && SND_LIB_MINOR <= 5
 #define MIDI_CTL_MSB_MAIN_VOLUME SND_MCTL_MSB_MAIN_VOLUME
 #define MIDI_CTL_MSB_EXPRESSION SND_MCTL_MSB_EXPRESSION
 #define MIDI_CTL_MSB_PAN SND_MCTL_MSB_PAN
@@ -49,7 +49,7 @@
 #define MIDI_CTL_MSB_BANK SND_MCTL_MSB_BANK
 #endif
 
-#if SND_LIB_MINOR > 5
+#if SND_LIB_MAJOR > 0 || SND_LIB_MINOR > 5
 #ifdef snd_seq_client_info_alloca
 #define ALSA_API_ENCAP
 #endif
@@ -294,7 +294,7 @@ int main(int argc, char **argv)
 static int get_file_desc(midi_status_t *st)
 {
 	int fd = -1;
-#if SND_LIB_MINOR > 5
+#if SND_LIB_MAJOR > 0 || SND_LIB_MINOR > 5
 	int npfds = snd_seq_poll_descriptors_count(port_client_get_seq(st->client), POLLIN);
 	struct pollfd pfd;
 	if (npfds == 1 &&
@@ -577,7 +577,7 @@ midi_status_new(int num_ports)
 	midi_status_t *st;
 
 	st = g_malloc0(sizeof(*st));
-#if SND_LIB_MINOR > 5
+#if SND_LIB_MAJOR > 0 || SND_LIB_MINOR > 5
 	mode = do_output ? SND_SEQ_OPEN_DUPLEX : SND_SEQ_OPEN_INPUT;
 #else
 	mode = do_output ? SND_SEQ_OPEN : SND_SEQ_OPEN_IN;

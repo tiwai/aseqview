@@ -1,3 +1,5 @@
+0.2.1	- Fix the compilation with ALSA 1.0.0.
+
 0.2.0	- Check alsa/asoundlib.h in configure
 	- Multi-threading
 	- Support for libcap

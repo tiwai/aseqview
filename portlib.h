@@ -30,7 +30,7 @@
 #include <sys/asoundlib.h>
 #endif
 
-#if SND_LIB_MINOR >= 6
+#if SND_LIB_MAJOR > 0 || SND_LIB_MINOR >= 6
 #define snd_seq_file_descriptor(x)	snd_seq_poll_descriptor(x)
 #define snd_seq_flush_output(x)		snd_seq_drain_output(x)
 #endif

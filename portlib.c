@@ -72,7 +72,7 @@ static void error(char *msg)
 	exit(1);
 }
 
-#if SND_LIB_MINOR > 5
+#if SND_LIB_MAJOR > 0 || SND_LIB_MINOR > 5
 static void error_handler(const char *file, int line, const char *func, int err, const char *fmt, ...)
 {
 	/* ignore.. */
@@ -93,7 +93,7 @@ port_client_t *port_client_new(char *name, int mode)
 	if ((client = malloc(sizeof(*client))) == NULL)
 		error("can't malloc");
 	memset(client, 0, sizeof(*client));
-#if SND_LIB_MINOR > 5
+#if SND_LIB_MAJOR > 0 || SND_LIB_MINOR > 5
 	snd_lib_error_set_handler(error_handler);
 	if (snd_seq_open(&client->seq, "hw", mode, SND_SEQ_NONBLOCK) < 0)
 		error("open seq");
@@ -191,7 +191,7 @@ int port_detach(port_t *p)
  */
 void port_client_do_loop(port_client_t *client, int timeout)
 {
-#if SND_LIB_MINOR > 5
+#if SND_LIB_MAJOR > 0 || SND_LIB_MINOR > 5
 	int npfds = snd_seq_poll_descriptors_count(client->seq, POLLIN);
 	struct pollfd *pfd;
 	if (npfds <= 0)
