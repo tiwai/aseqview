@@ -1,0 +1,112 @@
+.TH aseqview 1 "January 1, 2000"
+.LO 1
+.SH NAME
+aseqview \- ALSA sequencer event viewer and filter
+
+.SH SYNOPSIS
+.B aseqview
+[\-options]
+
+.SH DESCRIPTION
+.B aseqview
+is an ALSA sequencer user-client which works as an event viewr.
+It visualizes received events, e.g. note-on/off, controls, pitch
+wheels, using bar graphs, as often seen in many sequencer programs.
+Using this viewer, even a simple command line sequencer like
+.B pmidi(1)
+or
+.B playmidi1(1)
+becomes a cool one with graphical interface :-)
+
+Another feature of aseqview is redirection of events.
+aseqview can output the received events to subscription (or any given) ports with
+some modification like channel mute or pitch change.  Since this works 
+as a real-time filter client, such modifications can be applied also
+in real-time.
+
+.SH "CONNECTION OF SEQUENCER PORTS"
+.SS "CONNECTION VIA CONNECTION MANAGER"
+Just run
+.B aseqview
+without options:
+.IP "" 4
+% aseqview
+.PP
+Then, connect this client to any MIDI port (e.g. 65:0) via
+a connection manager like
+.B aconnect(1).
+.IP "" 4
+% aconnect 128:0 65:0
+.PP
+where 128:0 is the port of
+.B aseqview.
+
+.SS "DIRECT CONNECTION"
+Use
+.B \-d
+option with the output MIDI port:
+.IP "" 4
+% aseqview -d 65:0
+.PP
+Run a sequencer application (e.g.
+.B pmidi
+) and connect to aseqview:
+.IP "" 4
+% pmidi -p128:0 foo.mid
+.PP
+where 128:0 is the port of
+.B aseqview.
+
+.SH BUTTONS
+The slider bars on the bottom are pitch and velocity scale adjustment.
+You can change the current pitch +/-12 tones and velociy scale from 0
+to 200% in real time.  The channel buttons from 0 to 15 is used to
+mute or unmute the channel.
+
+If you need lower latency, become root and run with
+.B \-r
+option
+(or chown setuid root to this program).  This changes the schedule
+to FIFO with maximam prority.  You'll get in most cases sub-msec
+latency.
+
+.SH OPTIONS
+.TP
+.B \-o, --nooutput
+Suppress output to the subscription port.
+With this option, aseqview works only as an event viewer.
+.TP
+.B \-r, --realtime
+Set real-time priority (see above).
+This option is enalbed only for root.
+.TP
+.B \-p, --ports #
+Set number of ports to be opened.  As default 1.
+Each port opens a window to visualize the received events
+to it.  Only the port 0 has control buttons like pitch
+change, etc.
+.TP
+.B \-s, --source addr
+Set input connection client and port.
+The specified port is subscribed for input when the program starts.
+The accepted format is
+.B client:port,
+.B client.port
+or 's'.
+The last one means to use the (default) subscription port.
+.TP
+.B \-d, --dest addr
+Set output connection client and port.
+The accepted format is as well as in
+.B \-s
+option.
+As default, aseqview sends events to the subscription port,
+which is redirected to the attached ports by connection manager
+like aconnect utility.  If this option is given, the events
+are sent only to the specified port.
+
+.SH "SEE ALSO"
+aconnect(1), pmidi(1)
+
+.SH AUTHOR
+Takashi Iwai <iwai@ww.uni-erlangen.de>.

@@ -1,0 +1,48 @@
+%define ver	@VERSION@
+
+Summary: ASeqView - ALSA Sequencer Event Viewer
+Name: aseqview
+Version: %ver
+Release: 1
+Copyright: GPL
+Group: Applications/Sound
+Source: http://members.tripod.de/iwai/aseqview-%{ver}.tgz
+BuildRoot: /tmp/rpmtest
+URL: http//members.tripod.de/iwai/alsa.html
+%description
+================================================================
+	ASeqView - ALSA sequencer event viewer / filter
+		ver.0.1.2
+
+	Takashi Iwai <iwai@ww.uni-erlangen.de>
+================================================================
+
+ASeqView is an ALSA sequencer user-client which works as event viewr.
+It visualizes received events, e.g. note-on/off, controls, pitch
+wheels, using bar graphs, as often seen in many sequencer programs.
+Using this viewer, even a simple command line sequencer like pmidi or
+playmidi1 becomes a cool one with graphical interface :-)
+
+Another feature of ASeqView is redirection of events.
+ASeqView can output the received events to subscription ports with
+some modification like channel mute or pitch change.  Since this works 
+as a real-time filter client, such modifications can be applied also
+in real-time without complexity.
+
+%prep
+%setup
+%build
+./configure --prefix=/usr
+make
+
+%install
+make prefix="$RPM_BUILD_ROOT"/usr install-strip
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%files
+/usr/bin/*
+/usr/man/*
+
+%doc README NEWS AUTHORS ChangeLog

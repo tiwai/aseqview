@@ -1,0 +1,26 @@
+0.1.2e	- Accepts client.port address expression
+	- Accepts long style command-line options
+	- Add man page
+
+0.1.2d	- Modified for new sequencer API
+	
+0.1.2c	- Fix documentation typos and change file names
+	  (No functional changes)
+	
+0.1.2b	- Monr bug fix in time display
+
+0.1.2a	- Rewrite sequencer API for alsa-lib middle level routines
+
+0.1.2	- Use automake/autoconf
+	- Add velocity scale
+	- Support for multiple ports
+	- Display current queue time
+	
+0.1.1	Public release
+	- Bug fix in pitch correction
+	- Change portlib.c to accept multiple ports (for future)
+	- Add SYSEX parser
+	- Display current MIDI mode
+	
+0.1.0	Initial release
+

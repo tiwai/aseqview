@@ -1,0 +1,10 @@
+INSTALLTION
+===========
+
+1. Run configure script.
+	% ./configure
+
+2. Make and install the program
+	% make
+	% make install
+

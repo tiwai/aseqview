@@ -1,0 +1,113 @@
+================================================================
+	ASeqView - ALSA sequencer event viewer / filter
+		ver.0.1.2
+
+	Takashi Iwai <iwai@ww.uni-erlangen.de>
+================================================================
+
+INTRODUCTION
+============
+
+ASeqView is an ALSA sequencer user-client which works as event viewr.
+It visualizes received events, e.g. note-on/off, controls, pitch
+wheels, using bar graphs, as often seen in many sequencer programs.
+Using this viewer, even a simple command line sequencer like pmidi or
+playmidi1 becomes a cool one with graphical interface :-)
+
+Another feature of ASeqView is redirection of events.
+ASeqView can output the received events to subscription ports with
+some modification like channel mute or pitch change.  Since this works 
+as a real-time filter client, such modifications can be applied also
+in real-time without complexity.
+
+
+REQUIREMENTS
+============
+
+- ALSA 	0.5.0 or newer (sequencer protocol version >= 1.0.0)
+	0.4.x doesn't work
+- Gtk+	1.2 or newer
+
+
+CONNECTING TO THE MIDI PORT
+===========================
+
+1. CONNECTION VIA ACONNECT
+
+   Just run ASeqView
+
+	% aseqview
+
+   Then, connect this client to your MIDI port (e.g. 65:0)
+
+	% aconnect 128:0 65:0
+   If you miss aconnect utility, compile it under alsa-lib/test
+   directory via "make aconnect", and install it to the suitable
+   path.
+
+2. DIRECT CONNECTION FROM ASEQVIEW
+
+   Use -d option to the output MIDI port:
+
+	% aseqview -d 65:0
+
+   Run sequencer (e.g. pmidi) and connect to ASeqView:
+
+	% pmidi -p128:0 foo.mid
+
+
+BUTTONS
+=======
+
+The slider bars on the bottom are pitch and velocity scale adjustment.
+You can change the current pitch +/-12 tones and velociy scale from 0
+to 200% in real time.  The channel buttons from 0 to 15 is used to
+mute or unmute the channel.
+
+If you need lower latency, become root and run with -r option
+(or chown setuid root to this program).  This changes the schedule
+to FIFO with maximam prority.  You'll get in most cases sub-msec
+latency.
+
+
+COMMANDLINE OPTIONS
+===================
+
+   -o	Suppress output to the subscription port.
+	ASeqView works only as an event viewer.
+
+   -r	Set real-time priority (see above).
+	This option is enalbed only for root.
+
+   -p ports
+	Set number of ports to be opened.  As default 1.
+	Each port opens a window to visualize the received events
+	to it.  Only the port 0 has control buttons like pitch
+	change, etc.
+
+   -s client:port
+	Set input connection port.  The specified port is subscribed
+	for input when the program starts.
+
+   -d client:port
+	Set output connection port.
+	As default, ASeqView sends events to the subscription port,
+	which is redirected to the attached ports by connection manager
+	like aconnect utility.  If this option is given, the events
+	are sent only to the specified port.
+
+
+TODO
+====
+
+- Display keyboard
+- Better Gtk programming
+- Better visualization
+
+
+COPYRIGHT
+=========
+
+Copyright (c) 1999-2000 by Takashi Iwai <iwai@ww.uni-erlangen.de>
+Distribution under GPL 2 - see COPYING
+
