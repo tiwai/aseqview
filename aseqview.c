@@ -28,6 +28,7 @@
 #include <sched.h>
 #include <errno.h>
 #include <getopt.h>
+#include <pthread.h>
 #include "levelbar.h"
 #include "portlib.h"
 
@@ -135,7 +136,8 @@ static int is_redirect(port_status_t *port);
 static void restart_notes(midi_status_t *st);
 static GtkWidget *create_viewer(port_status_t *port);
 static void create_viewer_titles(GtkWidget *table);
-static void set_vel_bar_color(GtkWidget *w, int is_drum);
+static void set_vel_bar_color(GtkWidget *w, int is_drum, int in_buf);
+static void av_channel_update(GtkWidget *w, int val, int in_buf);
 static void create_channel_viewer(GtkWidget *table, port_status_t *st, int ch);
 static void mute_channel(GtkToggleButton *w, channel_status_t *chst);
 static void send_notes_off(channel_status_t *chst);
@@ -145,24 +147,35 @@ static int port_subscribed(port_t *p, int type, snd_seq_event_t *ev, port_status
 static int port_unused(port_t *p, int type, snd_seq_event_t *ev, port_status_t *port);
 static void redirect_event(port_status_t *port, snd_seq_event_t *ev);
 static int process_event(port_t *p, int type, snd_seq_event_t *ev, port_status_t *st);
-static void change_note(port_status_t *st, int ch, int key, int vel);
-static void change_controller(port_status_t *st, int ch, int param, int value);
-static void all_sounds_off(channel_status_t *st);
-static void all_notes_off(channel_status_t *st);
-static void reset_controllers(channel_status_t *chst);
+static void change_note(port_status_t *st, int ch, int key, int vel, int in_buf);
+static void change_controller(port_status_t *st, int ch, int param, int value, int in_buf);
+static void all_sounds_off(channel_status_t *st, int in_buf);
+static void all_notes_off(channel_status_t *st, int in_buf);
+static void reset_controllers(channel_status_t *chst, int in_buf);
 static void reset_all(midi_status_t *st);
-static void change_pitch(port_status_t *st, int ch, int value);
-static void change_program(port_status_t *st, int ch, int prog);
-static void parse_sysex(port_status_t *st, int len, unsigned char *buf);
+static void change_pitch(port_status_t *st, int ch, int value, int in_buf);
+static void change_program(port_status_t *st, int ch, int prog, int in_buf);
+static void parse_sysex(port_status_t *st, int len, unsigned char *buf, int in_buf);
 static GtkWidget *display_midi_init(GtkWidget *window, midi_status_t *st);
-static void display_midi_mode(midi_status_t *st);
+static void display_midi_mode(midi_status_t *st, int in_buf);
 static int expose_midi_mode(GtkWidget *w);
+
+static void *midi_loop(void *arg);
+static gboolean idle_cb(gpointer data);
+static int get_file_desc(midi_status_t *st);
+
+static void av_ringbuf_init(void);
+static int av_ringbuf_write(int type, GtkWidget *w, long data);
+static int av_ringbuf_read(int *type, GtkWidget **w, long *data);
 
 
 /*
  * local common variables
  */
 static int do_output = TRUE;
+static int rt_prio = FALSE;
+static int use_thread = TRUE;
+static pthread_t midi_thread;
 
 
 /*
@@ -175,6 +188,8 @@ static struct option long_option[] = {
 	{"dest", 1, NULL, 'd'},
 	{"ports", 1, NULL, 'p'},
 	{"help", 0, NULL, 'h'},
+	{"thread", 0, NULL, 't'},
+	{"nothread", 0, NULL, 'm'},
 	{NULL, 0, NULL, 0},
 };
 
@@ -188,13 +203,13 @@ int main(int argc, char **argv)
 
 	gtk_init(&argc, &argv);
 
-	while ((c = getopt_long(argc, argv, "ors:d:p:", long_option, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "ors:d:p:tm", long_option, NULL)) != -1) {
 		switch (c) {
 		case 'o':
 			do_output = FALSE;
 			break;
 		case 'r':
-			set_realtime_priority(SCHED_FIFO);
+			rt_prio = TRUE;
 			break;
 		case 's':
 			if (parse_addr(optarg, &src_client, &src_port) < 0) {
@@ -210,6 +225,12 @@ int main(int argc, char **argv)
 			break;
 		case 'p':
 			num_ports = atoi(optarg);
+			break;
+		case 't':
+			use_thread = TRUE;
+			break;
+		case 'm':
+			use_thread = FALSE;
 			break;
 		default:
 			usage();
@@ -238,23 +259,16 @@ int main(int argc, char **argv)
 		port_add_callback(port->port, PORT_MIDI_EVENT_CB,
 				  (port_callback_t)process_event, port);
 	}
-#if SND_LIB_MINOR > 5
-	{
-		int npfds = snd_seq_poll_descriptors_count(port_client_get_seq(st->client), POLLIN);
-		struct pollfd *pfd;
-		if (npfds > 0) {
-			pfd = alloca(sizeof(*pfd) * npfds);
-			if (snd_seq_poll_descriptors(port_client_get_seq(st->client), pfd, npfds, POLLIN) >= 0) {
-				int i;
-				for (i = 0; i < npfds; i++)
-					gdk_input_add(pfd[i].fd, GDK_INPUT_READ, handle_input, st);
-			}
-		}
+
+	if (use_thread) {
+		av_ringbuf_init();
+		pthread_create(&midi_thread, NULL, midi_loop, st);
+		gtk_idle_add(idle_cb, st);
+	} else {
+		gdk_input_add(get_file_desc(st), GDK_INPUT_READ, handle_input, st);
+		if (rt_prio)
+			set_realtime_priority(SCHED_FIFO);
 	}
-#else
-	gdk_input_add(snd_seq_file_descriptor(port_client_get_seq(st->client)),
-		      GDK_INPUT_READ, handle_input, st);
-#endif
 
 	/* explicit subscription to ports */
 	if (src_client >= 0 && src_client != SND_SEQ_ADDRESS_SUBSCRIBERS)
@@ -266,9 +280,136 @@ int main(int argc, char **argv)
 
 	gtk_main();
 
+	if (use_thread) {
+		port_client_stop(st->client);
+		pthread_join(midi_thread, NULL);
+	}
+
 	return 0;
 }
 
+
+/*
+ */
+static int get_file_desc(midi_status_t *st)
+{
+	int fd = -1;
+#if SND_LIB_MINOR > 5
+	int npfds = snd_seq_poll_descriptors_count(port_client_get_seq(st->client), POLLIN);
+	struct pollfd pfd;
+	if (npfds == 1 &&
+	    snd_seq_poll_descriptors(port_client_get_seq(st->client), &pfd, npfds, POLLIN) >= 0)
+		fd = pfd.fd;
+#else
+	fd = snd_seq_file_descriptor(port_client_get_seq(st->client));
+#endif
+	if (fd < 0) {
+		fprintf(stderr, "cannot get file descriptor for ALSA sequencer inputs\n");
+		exit(1);
+	}
+	return fd;
+}
+
+/*
+ */
+
+struct av_ringbuf {
+	int type;
+	GtkWidget *w;
+	long data;
+};
+
+#define RINGBUF_SIZE	512
+static struct av_ringbuf *ringbuf;
+static int ringbuf_rdptr, ringbuf_wrptr;
+
+static void av_ringbuf_init(void)
+{
+	ringbuf = (struct av_ringbuf *)malloc(sizeof(struct av_ringbuf) * RINGBUF_SIZE);
+	if (! ringbuf) {
+		fprintf(stderr, "cannot allocate ringbuffer\n");
+		exit(1);
+	}
+	memset(ringbuf, 0, sizeof(struct av_ringbuf) * RINGBUF_SIZE);
+	ringbuf_rdptr = ringbuf_wrptr = 0;
+}
+
+static int av_ringbuf_write(int type, GtkWidget *w, long data)
+{
+	int wp, nwp;
+	wp = ringbuf_wrptr;
+	nwp = (wp + 1) & (RINGBUF_SIZE - 1);
+	if (ringbuf_rdptr == nwp)
+		return 0;
+	ringbuf_wrptr = nwp;
+	ringbuf[wp].type = type;
+	ringbuf[wp].w = w;
+	ringbuf[wp].data = data;
+	return 1;
+}
+
+static int av_ringbuf_read(int *type, GtkWidget **w, long *data)
+{
+	int r;
+	if (ringbuf_rdptr == ringbuf_wrptr)
+		return 0;
+	r = ringbuf_rdptr;
+	*type = ringbuf[r].type;
+	*w = ringbuf[r].w;
+	*data = ringbuf[r].data;
+	r = (r + 1) & (RINGBUF_SIZE - 1);
+	ringbuf_rdptr = r;
+	return 1;
+}
+
+/*
+ */
+enum {
+	VEL_COLOR,
+	UPDATE_STATUS,
+	UPDATE_PGM,
+	UPDATE_MODE
+};
+
+static void *midi_loop(void *arg)
+{
+	midi_status_t *st = (midi_status_t *)arg;
+
+	if (rt_prio)
+		set_realtime_priority(SCHED_FIFO);
+
+	port_client_do_loop(st->client, 50);
+	pthread_exit(NULL);
+	return 0;
+}
+
+static gboolean
+idle_cb(gpointer data)
+{
+	// midi_status_t *st = (midi_status_t *)data;
+	GtkWidget *w;
+	int type;
+	long val;
+
+	while (av_ringbuf_read(&type, &w, &val)) {
+		switch (type) {
+		case VEL_COLOR:
+			set_vel_bar_color(w, val, 0);
+			break;
+		case UPDATE_STATUS:
+			av_channel_update(w, val, 0);
+			break;
+		case UPDATE_PGM:
+			gtk_label_set_text(GTK_LABEL(w), (char *)val);
+			break;
+		case UPDATE_MODE:
+			expose_midi_mode(w);
+			break;
+		}
+	}
+	usleep(1000);
+	return TRUE;
+}
 
 /*
  * set realtime prority as maximum
@@ -419,6 +560,8 @@ usage(void)
 	printf("   -p,--ports #      number of ports to be opened\n");
 	printf("   -s,--source addr  input from specified addr (client:port)\n");
 	printf("   -d,--dest addr    output to specified addr (client:port)\n");
+	printf("   -t,--thread       use multi-threads (default)\n");
+	printf("   -m,--nothread     don't use multi-threads\n");
 }
 
 
@@ -647,12 +790,16 @@ create_viewer_titles(GtkWidget *table)
  * set color of velocity bar
  */
 static void
-set_vel_bar_color(GtkWidget *w, int is_drum)
+set_vel_bar_color(GtkWidget *w, int is_drum, int in_buf)
 {
-	if (is_drum)
-		channel_status_bar_set_color_rgb(w, 0xffff, 0x4000, 0x4000);
-	else
-		channel_status_bar_set_color_rgb(w, 0x2000, 0xb000, 0x2000);
+	if (in_buf) {
+		av_ringbuf_write(VEL_COLOR, w, is_drum);
+	} else {
+		if (is_drum)
+			channel_status_bar_set_color_rgb(w, 0xffff, 0x4000, 0x4000);
+		else
+			channel_status_bar_set_color_rgb(w, 0x2000, 0xb000, 0x2000);
+	}
 }
 
 
@@ -688,7 +835,7 @@ create_channel_viewer(GtkWidget *table, port_status_t *st, int ch)
 
 	/* velocity */
 	w = level_bar_new(64, 16, 0, 127, 0);
-	set_vel_bar_color(w, chst->is_drum);
+	set_vel_bar_color(w, chst->is_drum, 0);
 	gtk_table_attach_defaults(GTK_TABLE(table), w, V_VEL, V_VEL + 1,
 				  top, bottom);
 	level_bar_set_level_color_rgb(w, 0xffff, 0xffff, 0x4000);
@@ -894,6 +1041,17 @@ port_unused(port_t *p, int type, snd_seq_event_t *ev, port_status_t *port)
 }
 
 /*
+ */
+static void
+av_channel_update(GtkWidget *w, int val, int in_buf)
+{
+	if (in_buf) {
+		av_ringbuf_write(UPDATE_STATUS, w, val);
+	} else
+		channel_status_bar_update(w, val);
+}
+
+/*
  * redirect an event to subscribers port
  */
 static void
@@ -950,24 +1108,30 @@ process_event(port_t *p, int type, snd_seq_event_t *ev, port_status_t *port)
 	case SND_SEQ_EVENT_NOTEON:
 	case SND_SEQ_EVENT_KEYPRESS:
 		change_note(port, ev->data.note.channel, ev->data.note.note,
-			    ev->data.note.velocity);
+			    ev->data.note.velocity,
+			    use_thread);
 		break;
 	case SND_SEQ_EVENT_NOTEOFF:
-		change_note(port, ev->data.note.channel, ev->data.note.note, 0);
+		change_note(port, ev->data.note.channel, ev->data.note.note, 0,
+			    use_thread);
 		break;
 	case SND_SEQ_EVENT_PGMCHANGE:
-		change_program(port, ev->data.control.channel, ev->data.control.value);
+		change_program(port, ev->data.control.channel, ev->data.control.value,
+			       use_thread);
 		break;
 	case SND_SEQ_EVENT_CONTROLLER:
 		change_controller(port, ev->data.control.channel,
 				  ev->data.control.param,
-				  ev->data.control.value);
+				  ev->data.control.value,
+				  use_thread);
 		break;
 	case SND_SEQ_EVENT_PITCHBEND:
-		change_pitch(port, ev->data.control.channel, ev->data.control.value);
+		change_pitch(port, ev->data.control.channel, ev->data.control.value,
+			     use_thread);
 		break;
 	case SND_SEQ_EVENT_SYSEX:
-		parse_sysex(port, ev->data.ext.len, ev->data.ext.ptr);
+		parse_sysex(port, ev->data.ext.len, ev->data.ext.ptr,
+			    use_thread);
 		break;
 	}
 
@@ -978,7 +1142,7 @@ process_event(port_t *p, int type, snd_seq_event_t *ev, port_status_t *port)
  * change note (note-on/off, key change)
  */
 static void
-change_note(port_status_t *port, int ch, int key, int vel)
+change_note(port_status_t *port, int ch, int key, int vel, int in_buf)
 {
 	channel_status_t *chst;
 	int i;
@@ -995,7 +1159,7 @@ change_note(port_status_t *port, int ch, int key, int vel)
 	if (vel >= chst->max_vel) {
 		chst->max_vel = vel;
 		chst->max_vel_key = key;
-		channel_status_bar_update(chst->w_vel, chst->max_vel);
+		av_channel_update(chst->w_vel, chst->max_vel, in_buf);
 	} else {
 		if (chst->max_vel_key == key) {
 			chst->max_vel = vel;
@@ -1005,7 +1169,7 @@ change_note(port_status_t *port, int ch, int key, int vel)
 					chst->max_vel_key = i;
 				}
 			}
-			channel_status_bar_update(chst->w_vel, chst->max_vel);
+			av_channel_update(chst->w_vel, chst->max_vel, in_buf);
 		}
 	}
 }
@@ -1014,7 +1178,7 @@ change_note(port_status_t *port, int ch, int key, int vel)
  * change controller
  */
 static void
-change_controller(port_status_t *port, int ch, int param, int value)
+change_controller(port_status_t *port, int ch, int param, int value, int in_buf)
 {
 	channel_status_t *chst;
 
@@ -1026,22 +1190,22 @@ change_controller(port_status_t *port, int ch, int param, int value)
 
 	switch (param) {
 	case MIDI_CTL_ALL_SOUNDS_OFF:
-		all_sounds_off(chst);
+		all_sounds_off(chst, in_buf);
 		break;
 	case MIDI_CTL_ALL_NOTES_OFF:
-		all_notes_off(chst);
+		all_notes_off(chst, in_buf);
 		break;
 	case MIDI_CTL_RESET_CONTROLLERS:
-		reset_controllers(chst);
+		reset_controllers(chst, in_buf);
 		break;
 	case MIDI_CTL_MSB_EXPRESSION:
-		channel_status_bar_update(chst->w_exp, value);
+		av_channel_update(chst->w_exp, value, in_buf);
 		break;
 	case MIDI_CTL_MSB_MAIN_VOLUME:
-		channel_status_bar_update(chst->w_main, value);
+		av_channel_update(chst->w_main, value, in_buf);
 		break;
 	case MIDI_CTL_MSB_PAN:
-		channel_status_bar_update(chst->w_pan, value);
+		av_channel_update(chst->w_pan, value, in_buf);
 		break;
 
 	case MIDI_CTL_MSB_BANK:
@@ -1051,7 +1215,7 @@ change_controller(port_status_t *port, int ch, int param, int value)
 				chst->is_drum = 1;
 			else
 				chst->is_drum = 0;
-			set_vel_bar_color(chst->w_vel, chst->is_drum);
+			set_vel_bar_color(chst->w_vel, chst->is_drum, in_buf);
 		}
 		break;
 	}
@@ -1061,7 +1225,7 @@ change_controller(port_status_t *port, int ch, int param, int value)
  * change pitch
  */
 static void
-change_pitch(port_status_t *port, int ch, int value)
+change_pitch(port_status_t *port, int ch, int value, int in_buf)
 {
 	channel_status_t *chst;
 
@@ -1069,14 +1233,14 @@ change_pitch(port_status_t *port, int ch, int value)
 		return;
 	chst = &port->ch[ch];
 	chst->pitch = value;
-	channel_status_bar_update(chst->w_pitch, value);
+	av_channel_update(chst->w_pitch, value, in_buf);
 }
 
 /*
  * change program
  */
 static void
-change_program(port_status_t *port, int ch, int prog)
+change_program(port_status_t *port, int ch, int prog, int in_buf)
 {
 	channel_status_t *chst;
 
@@ -1085,43 +1249,47 @@ change_program(port_status_t *port, int ch, int prog)
 	chst = &port->ch[ch];
 	chst->prog = prog;
 	sprintf(chst->progname, "%3d", prog);
-	gtk_label_set_text(GTK_LABEL(chst->w_prog), chst->progname);
+	if (in_buf) {
+		av_ringbuf_write(UPDATE_PGM, chst->w_prog, (unsigned long)chst->progname);
+	} else {
+		gtk_label_set_text(GTK_LABEL(chst->w_prog), chst->progname);
+	}
 }
 
 /*
  * clear all notes
  */
 static void
-all_sounds_off(channel_status_t *chst)
+all_sounds_off(channel_status_t *chst, int in_buf)
 {
 	memset(chst->vel, 0, sizeof(chst->vel));
 	chst->max_vel = 0;
 	chst->max_vel_key = 0;
-	channel_status_bar_update(chst->w_vel, 0);
+	av_channel_update(chst->w_vel, 0, in_buf);
 }
 
 /*
  * note off - not exactly same as all_sounds_off
  */
 static void
-all_notes_off(channel_status_t *chst)
+all_notes_off(channel_status_t *chst, int in_buf)
 {
-	all_sounds_off(chst);
+	all_sounds_off(chst, in_buf);
 }
 
 /*
  * reset controllers
  */
 static void
-reset_controllers(channel_status_t *chst)
+reset_controllers(channel_status_t *chst, int in_buf)
 {
 	memset(chst->ctrl, 0, sizeof(chst->ctrl));
 	chst->ctrl[MIDI_CTL_MSB_MAIN_VOLUME] = 100;
-	channel_status_bar_update(chst->w_main, 100);
+	av_channel_update(chst->w_main, 100, in_buf);
 	chst->ctrl[MIDI_CTL_MSB_EXPRESSION] = 127;
-	channel_status_bar_update(chst->w_exp, 127);
+	av_channel_update(chst->w_exp, 127, in_buf);
 	chst->ctrl[MIDI_CTL_MSB_PAN] = 64;
-	channel_status_bar_update(chst->w_pan, 64);
+	av_channel_update(chst->w_pan, 64, in_buf);
 }
 
 /*
@@ -1134,24 +1302,24 @@ reset_all(midi_status_t *st)
 
 	st->midi_mode = MIDI_MODE_GM;
 	st->timer_update = TRUE;
-	display_midi_mode(st);
+	display_midi_mode(st, 0);
 	for (p = 0; p < st->num_ports; p++) {
 		port_status_t *port = &st->ports[p];
 		if (port->index < 0)
 			continue;
 		for (i = 0; i < MIDI_CHANNELS; i++) {
 			channel_status_t *chst = &port->ch[i];
-			all_sounds_off(chst);
-			reset_controllers(chst);
-			change_pitch(port, i, 0);
-			change_program(port, i, 0);
+			all_sounds_off(chst, 0);
+			reset_controllers(chst, 0);
+			change_pitch(port, i, 0, 0);
+			change_program(port, i, 0, 0);
 			if (is_redirect(port))
 				send_resets(chst);
 			if (i == 9)
 				chst->is_drum = 1;
 			else
 				chst->is_drum = 0;
-			set_vel_bar_color(chst->w_vel, chst->is_drum);
+			set_vel_bar_color(chst->w_vel, chst->is_drum, 0);
 		}
 		if (is_redirect(port))
 			port_flush_event(port->port);
@@ -1175,7 +1343,7 @@ get_channel(unsigned char cmd)
  * parse sysex message
  */
 static void
-parse_sysex(port_status_t *port, int len, unsigned char *buf)
+parse_sysex(port_status_t *port, int len, unsigned char *buf, int in_buf)
 {
 	midi_status_t *st = port->main;
 
@@ -1209,7 +1377,7 @@ parse_sysex(port_status_t *port, int len, unsigned char *buf)
 		if (st->midi_mode != MIDI_MODE_GS &&
 		    st->midi_mode != MIDI_MODE_XG) {
 			st->midi_mode = MIDI_MODE_GM;
-			display_midi_mode(st);
+			display_midi_mode(st, in_buf);
 			/*init_midi_status(chset);*/
 		}
 	}
@@ -1220,7 +1388,7 @@ parse_sysex(port_status_t *port, int len, unsigned char *buf)
 		if (st->midi_mode != MIDI_MODE_GS &&
 		    st->midi_mode != MIDI_MODE_XG) {
 			st->midi_mode = MIDI_MODE_GS;
-			display_midi_mode(st);
+			display_midi_mode(st, in_buf);
 		}
 
 		if (buf[5] == 0x00 && buf[6] == 0x7f && buf[7] == 0x00) {
@@ -1236,14 +1404,14 @@ parse_sysex(port_status_t *port, int len, unsigned char *buf)
 					port->ch[p].is_drum = 1;
 				else
 					port->ch[p].is_drum = 0;
-				set_vel_bar_color(port->ch[p].w_vel, port->ch[p].is_drum);
+				set_vel_bar_color(port->ch[p].w_vel, port->ch[p].is_drum, in_buf);
 			}
 
 		} else if ((buf[5] & 0xf0) == 0x10 && buf[6] == 0x21) {
 			/* program */
 			int p = get_channel(buf[5]);
 			if (p < MIDI_CHANNELS && ! port->ch[p].is_drum)
-				change_program(port, p, buf[7]);
+				change_program(port, p, buf[7], in_buf);
 		}
 	}
 
@@ -1251,7 +1419,7 @@ parse_sysex(port_status_t *port, int len, unsigned char *buf)
 	else if (len >= sizeof(xg_on_macro) &&
 		 memcmp(buf, xg_on_macro, sizeof(xg_on_macro)) == 0) {
 		st->midi_mode = MIDI_MODE_XG;
-		display_midi_mode(st);
+		display_midi_mode(st, in_buf);
 	}
 }
 
@@ -1321,9 +1489,13 @@ display_midi_init(GtkWidget *window, midi_status_t *st)
 }
 
 static void
-display_midi_mode(midi_status_t *st)
+display_midi_mode(midi_status_t *st, int in_buf)
 {
-	expose_midi_mode(st->w_midi_mode);
+	if (in_buf) {
+		av_ringbuf_write(UPDATE_MODE, st->w_midi_mode, 0);
+	} else {
+		expose_midi_mode(st->w_midi_mode);
+	}
 }
 
 static int

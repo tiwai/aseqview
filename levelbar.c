@@ -22,6 +22,7 @@
 #include "config.h"
 #endif
 #include "levelbar.h"
+#include <stdlib.h>
 
 /*
  * status bar instance record

@@ -21,7 +21,14 @@
 #ifndef PORTLIB_H_DEF
 #define PORTLIB_H_DEF
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#ifdef HAVE_ALSA_ASOUNDLIB_H
+#include <alsa/asoundlib.h>
+#else
 #include <sys/asoundlib.h>
+#endif
 
 #if SND_LIB_MINOR >= 6
 #define snd_seq_file_descriptor(x)	snd_seq_poll_descriptor(x)
@@ -55,7 +62,7 @@ port_client_t *port_client_new(char *name, int mode);
 void port_client_delete(port_client_t *p);
 port_t *port_attach(port_client_t *p, char *name, unsigned int cap, unsigned int type);
 int port_detach(port_t *p);
-void port_client_do_loop(port_client_t *p);
+void port_client_do_loop(port_client_t *p, int timeout);
 int port_client_do_event(port_client_t *p);
 port_t *port_client_search_port(port_client_t *client, int port);
 
@@ -64,6 +71,7 @@ snd_seq_t *port_client_get_seq(port_client_t *c);
 int port_client_get_id(port_client_t *p);
 int port_get_port(port_t *p);
 int port_client_get_port(port_client_t *c);
+void port_client_stop(port_client_t *c);
 
 int port_connect_to(port_t *p, int client, int port);
 int port_connect_from(port_t *p, int client, int port);

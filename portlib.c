@@ -44,6 +44,7 @@ struct port_client_t {
 	int mode;
 	int num_ports;
 	port_t *ports;
+	int running;
 };
 
 struct port_t {
@@ -188,7 +189,7 @@ int port_detach(port_t *p)
 /*
  * main loop
  */
-void port_client_do_loop(port_client_t *client)
+void port_client_do_loop(port_client_t *client, int timeout)
 {
 #if SND_LIB_MINOR > 5
 	int npfds = snd_seq_poll_descriptors_count(client->seq, POLLIN);
@@ -198,8 +199,9 @@ void port_client_do_loop(port_client_t *client)
 	pfd = alloca(sizeof(*pfd) * npfds);
 	if (snd_seq_poll_descriptors(client->seq, pfd, npfds, POLLIN) < 0)
 		return;
-	for (;;) {
-		if (poll(pfd, npfds, -1) < 0)
+	client->running = 1;
+	while (client->running) {
+		if (poll(pfd, npfds, timeout) < 0)
 			error("poll");
 		if (port_client_do_event(client))
 			break;
@@ -207,11 +209,16 @@ void port_client_do_loop(port_client_t *client)
 #else
 	fd_set rfds;
 	int fd = snd_seq_file_descriptor(client->seq);
+	struct timeval tval;
 	
-	for (;;) {
+	tval.tv_sec = timeout / 1000;
+	tval.tv_usec = timeout * 1000;
+
+	client->running = 1;
+	while (client->running) {
 		FD_ZERO(&rfds);
 		FD_SET(fd, &rfds);
-		if (select(fd + 1, &rfds, NULL, NULL, NULL) < 0)
+		if (select(fd + 1, &rfds, NULL, NULL, timeout < 0 ? NULL : &tval) < 0)
 			error("select");
 		if (FD_ISSET(fd, &rfds)) {
 			if (port_client_do_event(client))
@@ -328,6 +335,11 @@ port_client_t *port_get_client(port_t *p)
 int port_get_port(port_t *p)
 {
 	return p->port;
+}
+
+void port_client_stop(port_client_t *client)
+{
+	client->running = 0;
 }
 
 /*

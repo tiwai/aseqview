@@ -1,3 +1,13 @@
+0.2.0	- Check alsa/asoundlib.h in configure
+	- Multi-threading
+	- Support for libcap
+	
+0.1.4	- Bug fixed release
+	
+0.1.3	- ALSA 0.9.x support
+	
+0.1.2f	- Minor bug fixes
+	
 0.1.2e	- Accepts client.port address expression
 	- Accepts long style command-line options
 	- Add man page
