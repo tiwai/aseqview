@@ -1,7 +1,6 @@
 ## Process this file with automake to produce Makefile.in
 
-INCLUDES = \
-	@GTK_CFLAGS@
+AM_CFLAGS = @ASEQVIEW_CFLAGS@
 
 bin_PROGRAMS = aseqview
 man_MANS = aseqview.1
@@ -11,7 +10,7 @@ aseqview_SOURCES = \
 	levelbar.c levelbar.h \
 	portlib.c portlib.h
 
-aseqview_LDADD = @GTK_LIBS@
+aseqview_LDADD = @ASEQVIEW_LIBS@
 
 EXTRA_DIST = \
 	$(man_MANS) \
