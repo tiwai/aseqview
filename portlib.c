@@ -83,9 +83,14 @@ port_client_t *port_client_new(char *name, int mode)
 	if ((client = malloc(sizeof(*client))) == NULL)
 		error("can't malloc");
 	memset(client, 0, sizeof(*client));
+#if SND_LIB_MINOR > 5
+	if (snd_seq_open(&client->seq, "hw", mode, SND_SEQ_NONBLOCK) < 0)
+		error("open seq");
+#else
 	if (snd_seq_open(&client->seq, mode) < 0)
 		error("open seq");
 	snd_seq_block_mode(client->seq, 0);
+#endif
 	client->client = snd_seq_client_id(client->seq);
 	client->mode = mode;
 	client->num_ports = 0;
@@ -177,6 +182,21 @@ int port_detach(port_t *p)
  */
 void port_client_do_loop(port_client_t *client)
 {
+#if SND_LIB_MINOR > 5
+	int npfds = snd_seq_poll_descriptors_count(client->seq, POLLIN);
+	struct pollfd *pfd;
+	if (npfds <= 0)
+		return;
+	pfd = alloca(sizeof(*pfd) * npfds);
+	if (snd_seq_poll_descriptors(client->seq, pfd, npfds, POLLIN) < 0)
+		return;
+	for (;;) {
+		if (poll(pfd, npfds, -1) < 0)
+			error("poll");
+		if (port_client_do_event(client))
+			break;
+	}
+#else
 	fd_set rfds;
 	int fd = snd_seq_file_descriptor(client->seq);
 	
@@ -190,6 +210,7 @@ void port_client_do_loop(port_client_t *client)
 				break;
 		}
 	}
+#endif
 }
 
 

@@ -38,6 +38,16 @@
 #define MAX_MIDI_VALS	128
 #define PROG_NAME_LEN	8
 
+#if SND_LIB_MINOR <= 5
+#define MIDI_CTL_MSB_MAIN_VOLUME SND_MCTL_MSB_MAIN_VOLUME
+#define MIDI_CTL_MSB_EXPRESSION SND_MCTL_MSB_EXPRESSION
+#define MIDI_CTL_MSB_PAN SND_MCTL_MSB_PAN
+#define MIDI_CTL_ALL_SOUNDS_OFF SND_MCTL_ALL_SOUNDS_OFF
+#define MIDI_CTL_RESET_CONTROLLERS SND_MCTL_RESET_CONTROLLERS
+#define MIDI_CTL_ALL_NOTES_OFF SND_MCTL_ALL_NOTES_OFF
+#define MIDI_CTL_MSB_BANK SND_MCTL_MSB_BANK
+#endif
+
 typedef struct midi_status_t midi_status_t;
 typedef struct port_status_t port_status_t;
 typedef struct channel_status_t channel_status_t;
@@ -222,8 +232,23 @@ int main(int argc, char **argv)
 		port_add_callback(port->port, PORT_MIDI_EVENT_CB,
 				  (port_callback_t)process_event, port);
 	}
+#if SND_LIB_MINOR > 5
+	{
+		int npfds = snd_seq_poll_descriptors_count(port_client_get_seq(st->client), POLLIN);
+		struct pollfd *pfd;
+		if (npfds > 0) {
+			pfd = alloca(sizeof(*pfd) * npfds);
+			if (snd_seq_poll_descriptors(port_client_get_seq(st->client), pfd, npfds, POLLIN) >= 0) {
+				int i;
+				for (i = 0; i < npfds; i++)
+					gdk_input_add(pfd[i].fd, GDK_INPUT_READ, handle_input, st);
+			}
+		}
+	}
+#else
 	gdk_input_add(snd_seq_file_descriptor(port_client_get_seq(st->client)),
 		      GDK_INPUT_READ, handle_input, st);
+#endif
 
 	/* explicit subscription to ports */
 	if (src_client >= 0 && src_client != SND_SEQ_ADDRESS_SUBSCRIBERS)
@@ -393,10 +418,11 @@ midi_status_new(int num_ports)
 	midi_status_t *st;
 
 	st = g_malloc0(sizeof(*st));
-	if (do_output)
-		mode = SND_SEQ_OPEN;
-	else
-		mode = SND_SEQ_OPEN_IN;
+#if SND_LIB_MINOR > 5
+	mode = do_output ? SND_SEQ_OPEN_DUPLEX : SND_SEQ_OPEN_INPUT;
+#else
+	mode = do_output ? SND_SEQ_OPEN : SND_SEQ_OPEN_IN;
+#endif
 	st->client = port_client_new("MIDI Viewer", mode);
 	caps = SND_SEQ_PORT_CAP_WRITE |
 		SND_SEQ_PORT_CAP_SUBS_WRITE;
@@ -428,9 +454,9 @@ midi_status_new(int num_ports)
 			else
 				chst->is_drum = 0;
 			sprintf(chst->progname, "%3d", 0);
-			chst->ctrl[SND_MCTL_MSB_MAIN_VOLUME] = 100;
-			chst->ctrl[SND_MCTL_MSB_EXPRESSION] = 127;
-			chst->ctrl[SND_MCTL_MSB_PAN] = 64;
+			chst->ctrl[MIDI_CTL_MSB_MAIN_VOLUME] = 100;
+			chst->ctrl[MIDI_CTL_MSB_EXPRESSION] = 127;
+			chst->ctrl[MIDI_CTL_MSB_PAN] = 64;
 		}
 	}
 
@@ -724,7 +750,7 @@ send_notes_off(channel_status_t *chst)
 	snd_seq_ev_clear(&tmpev);
 	snd_seq_ev_set_direct(&tmpev);
 	snd_seq_ev_set_subs(&tmpev);
-	snd_seq_ev_set_controller(&tmpev, chst->ch, SND_MCTL_ALL_SOUNDS_OFF, 0);
+	snd_seq_ev_set_controller(&tmpev, chst->ch, MIDI_CTL_ALL_SOUNDS_OFF, 0);
 	port_write_event(chst->port->port, &tmpev, 1);
 }
 
@@ -740,9 +766,9 @@ send_resets(channel_status_t *chst)
 	snd_seq_ev_clear(&tmpev);
 	snd_seq_ev_set_direct(&tmpev);
 	snd_seq_ev_set_subs(&tmpev);
-	snd_seq_ev_set_controller(&tmpev, chst->ch, SND_MCTL_RESET_CONTROLLERS, 0);
+	snd_seq_ev_set_controller(&tmpev, chst->ch, MIDI_CTL_RESET_CONTROLLERS, 0);
 	port_write_event(chst->port->port, &tmpev, 0);
-	snd_seq_ev_set_controller(&tmpev, chst->ch, SND_MCTL_ALL_SOUNDS_OFF, 0);
+	snd_seq_ev_set_controller(&tmpev, chst->ch, MIDI_CTL_ALL_SOUNDS_OFF, 0);
 	port_write_event(chst->port->port, &tmpev, 0);
 	tmpev.type = SND_SEQ_EVENT_REGPARAM;
 	tmpev.data.control.param = 0;
@@ -971,26 +997,26 @@ change_controller(port_status_t *port, int ch, int param, int value)
 	chst->ctrl[param] = value;
 
 	switch (param) {
-	case SND_MCTL_ALL_SOUNDS_OFF:
+	case MIDI_CTL_ALL_SOUNDS_OFF:
 		all_sounds_off(chst);
 		break;
-	case SND_MCTL_ALL_NOTES_OFF:
+	case MIDI_CTL_ALL_NOTES_OFF:
 		all_notes_off(chst);
 		break;
-	case SND_MCTL_RESET_CONTROLLERS:
+	case MIDI_CTL_RESET_CONTROLLERS:
 		reset_controllers(chst);
 		break;
-	case SND_MCTL_MSB_EXPRESSION:
+	case MIDI_CTL_MSB_EXPRESSION:
 		channel_status_bar_update(chst->w_exp, value);
 		break;
-	case SND_MCTL_MSB_MAIN_VOLUME:
+	case MIDI_CTL_MSB_MAIN_VOLUME:
 		channel_status_bar_update(chst->w_main, value);
 		break;
-	case SND_MCTL_MSB_PAN:
+	case MIDI_CTL_MSB_PAN:
 		channel_status_bar_update(chst->w_pan, value);
 		break;
 
-	case SND_MCTL_MSB_BANK:
+	case MIDI_CTL_MSB_BANK:
 		if (port->main->midi_mode == MIDI_MODE_XG) {
 			/* change drum flag and color */
 			if (value == 127)
@@ -1062,11 +1088,11 @@ static void
 reset_controllers(channel_status_t *chst)
 {
 	memset(chst->ctrl, 0, sizeof(chst->ctrl));
-	chst->ctrl[SND_MCTL_MSB_MAIN_VOLUME] = 100;
+	chst->ctrl[MIDI_CTL_MSB_MAIN_VOLUME] = 100;
 	channel_status_bar_update(chst->w_main, 100);
-	chst->ctrl[SND_MCTL_MSB_EXPRESSION] = 127;
+	chst->ctrl[MIDI_CTL_MSB_EXPRESSION] = 127;
 	channel_status_bar_update(chst->w_exp, 127);
-	chst->ctrl[SND_MCTL_MSB_PAN] = 64;
+	chst->ctrl[MIDI_CTL_MSB_PAN] = 64;
 	channel_status_bar_update(chst->w_pan, 64);
 }
 
