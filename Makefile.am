@@ -14,7 +14,8 @@ aseqview_SOURCES = \
 aseqview_LDADD = @GTK_LIBS@
 
 EXTRA_DIST = \
-	bitmaps/gm.xbm bitmaps/gs.xbm bitmaps/xg.xbm etc/aseqview.spec.in
+	bitmaps/gm.xbm bitmaps/gs.xbm bitmaps/xg.xbm etc/aseqview.spec.in \
+	etc/aseqview.spec.in
 
 CONFIG_CLEAN_FILES = etc/aseqview.spec
 

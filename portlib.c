@@ -71,6 +71,16 @@ static void error(char *msg)
 	exit(1);
 }
 
+#if SND_LIB_MINOR > 5
+static void error_handler(const char *file, int line, const char *func, int err, const char *fmt, ...)
+{
+	/* ignore.. */
+}
+#ifdef snd_seq_client_info_alloca
+#define ALSA_API_ENCAP
+#endif
+#endif
+
 
 /*
  * create a client by non-blocking mode
@@ -78,12 +88,12 @@ static void error(char *msg)
 port_client_t *port_client_new(char *name, int mode)
 {
 	port_client_t *client;
-	snd_seq_client_info_t info;
 
 	if ((client = malloc(sizeof(*client))) == NULL)
 		error("can't malloc");
 	memset(client, 0, sizeof(*client));
 #if SND_LIB_MINOR > 5
+	snd_lib_error_set_handler(error_handler);
 	if (snd_seq_open(&client->seq, "hw", mode, SND_SEQ_NONBLOCK) < 0)
 		error("open seq");
 #else
@@ -96,9 +106,7 @@ port_client_t *port_client_new(char *name, int mode)
 	client->num_ports = 0;
 	client->ports = NULL;
 	
-	memset(&info, 0, sizeof(info));
-	strncpy(info.name, name, sizeof(info.name)-1);
-	if (snd_seq_set_client_info(client->seq, &info) < 0)
+	if (snd_seq_set_client_name(client->seq, name) < 0)
 		error("set client info");
 
 	return client;
@@ -259,6 +267,27 @@ static int call_callbacks(port_client_t *client, snd_seq_event_t *ev)
 		return 0;
 
 	switch (ev->type) {
+#ifdef ALSA_API_ENCAP
+#define snd_seq_addr_equal(a,b)	((a)->client == (b)->client && (a)->port == (b)->port)
+	case SND_SEQ_EVENT_PORT_SUBSCRIBED:
+		if (snd_seq_addr_equal(&ev->data.connect.sender, &ev->dest)) {
+			p->num_subscribed++;
+			return port_call_callback(p, PORT_SUBSCRIBE_CB, ev);
+		} else if (snd_seq_addr_equal(&ev->data.connect.dest, &ev->dest)) {
+			p->num_used++;
+			return port_call_callback(p, PORT_USE_CB, ev);
+		}
+		break;
+	case SND_SEQ_EVENT_PORT_UNSUBSCRIBED:
+		if (snd_seq_addr_equal(&ev->data.connect.sender, &ev->dest)) {
+			p->num_subscribed--;
+			return port_call_callback(p, PORT_UNSUBSCRIBE_CB, ev);
+		} else if (snd_seq_addr_equal(&ev->data.connect.dest, &ev->dest)) {
+			p->num_used--;
+			return port_call_callback(p, PORT_UNUSE_CB, ev);
+		}
+		break;
+#else
 	case SND_SEQ_EVENT_PORT_SUBSCRIBED:
 		p->num_subscribed++;
 		return port_call_callback(p, PORT_SUBSCRIBE_CB, ev);
@@ -271,6 +300,7 @@ static int call_callbacks(port_client_t *client, snd_seq_event_t *ev)
 	case SND_SEQ_EVENT_PORT_UNUSED:
 		p->num_used--;
 		return port_call_callback(p, PORT_UNUSE_CB, ev);
+#endif
 	default:
 		return port_call_callback(p, PORT_MIDI_EVENT_CB, ev);
 	}

@@ -48,6 +48,12 @@
 #define MIDI_CTL_MSB_BANK SND_MCTL_MSB_BANK
 #endif
 
+#if SND_LIB_MINOR > 5
+#ifdef snd_seq_client_info_alloca
+#define ALSA_API_ENCAP
+#endif
+#endif
+
 typedef struct midi_status_t midi_status_t;
 typedef struct port_status_t port_status_t;
 typedef struct channel_status_t channel_status_t;
@@ -818,14 +824,26 @@ update_time(GtkWidget *w)
 	midi_status_t *st = gtk_object_get_user_data(GTK_OBJECT(w));
 
 	if (st->timer_update) {
-		snd_seq_queue_status_t qst;
+		snd_seq_queue_status_t *qst;
 		char tmp[8];
 
+#ifdef ALSA_API_ENCAP
+		snd_seq_queue_status_alloca(&qst);
+#else
+		qst = alloca(sizeof(snd_seq_queue_status_t));
+#endif
 		st->timer_update = FALSE;
-		snd_seq_get_queue_status(port_client_get_seq(st->client), st->queue, &qst);
-		sprintf(tmp, "%02d:%02d", (int)qst.time.tv_sec / 60,
-			(int)qst.time.tv_sec % 60);
-		gtk_label_set_text(GTK_LABEL(st->w_time),  tmp);
+		if (! snd_seq_get_queue_status(port_client_get_seq(st->client), st->queue, qst)) {
+			const snd_seq_real_time_t *rt;
+#ifdef ALSA_API_ENCAP
+			rt = snd_seq_queue_status_get_real_time(qst);
+#else
+			rt = &qst->time;
+#endif
+			sprintf(tmp, "%02d:%02d", (int)rt->tv_sec / 60,
+				(int)rt->tv_sec % 60);
+			gtk_label_set_text(GTK_LABEL(st->w_time),  tmp);
+		}
 	}
 	return TRUE;
 }
