@@ -8,7 +8,7 @@ Copyright: GPL
 Group: Applications/Sound
 Source: http://members.tripod.de/iwai/aseqview-%{ver}.tgz
 BuildRoot: /tmp/rpmtest
-URL: http//members.tripod.de/iwai/alsa.html
+URL: http//www.alsa-project.org/~iwai/alsa.html
 %description
 ================================================================
 	ASeqView - ALSA sequencer event viewer / filter

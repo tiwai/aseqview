@@ -104,6 +104,12 @@ As default, aseqview sends events to the subscription port,
 which is redirected to the attached ports by connection manager
 like aconnect utility.  If this option is given, the events
 are sent only to the specified port.
+.TP
+.B \-t, --thread
+Run with multi-threading.  This mode is used as default.
+.TP
+.B \-m, --nothread
+Run without multi-threading.
 
 .SH "SEE ALSO"
 aconnect(1), pmidi(1)

@@ -1,6 +1,6 @@
 ================================================================
 	ASeqView - ALSA sequencer event viewer / filter
-		ver.0.1.2
+		ver.0.2.0
 
 	Takashi Iwai <iwai@ww.uni-erlangen.de>
 ================================================================
@@ -96,6 +96,11 @@ COMMANDLINE OPTIONS
 	like aconnect utility.  If this option is given, the events
 	are sent only to the specified port.
 
+   -t
+	Run with multi-threading.  This mode is used as default.
+
+   -m
+	Run without multi-threading.
 
 TODO
 ====
