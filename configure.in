@@ -1,7 +1,7 @@
 dnl Process this file with autoconf to produce a configure script.
 
 AC_INIT(configure.in)
-AM_INIT_AUTOMAKE(aseqview, 0.1.4)
+AM_INIT_AUTOMAKE(aseqview, 0.1.5)
 AM_CONFIG_HEADER(config.h)
 
 AC_PROG_CC
@@ -11,6 +11,11 @@ AC_HEADER_STDC
 AM_PATH_ALSA(0.5.0)
 AC_C_INLINE
 AM_PATH_GTK(1.2.0, , AC_MSG_ERROR(Cannot find GTK: Is gtk-config in path?))
+AH_TEMPLATE([HAVE_LIBCAP], [Hey, we have libcap])
+AC_CHECK_HEADER(sys/capability.h,
+		AC_CHECK_LIB(cap, cap_get_proc,
+			     [AC_DEFINE(HAVE_LIBCAP)
+			      LIBS="$LIBS -lcap"]))
 
 dnl Use -Wall if we have gcc.
 changequote(,)dnl

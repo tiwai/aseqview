@@ -1,7 +1,7 @@
 /*
  * aseqview - ALSA sequencer event viewer / filter
  *
- * Copyright (c) 1999-2000 by Takashi Iwai <iwai@ww.uni-erlangen.de>
+ * Copyright (c) 1999-2000 by Takashi Iwai <tiwai@suse.de>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -277,6 +277,16 @@ static int
 set_realtime_priority(int policy)
 {
 	struct sched_param parm;
+#ifdef HAVE_CAPABILITY_H
+	cap_t cp;
+	cap_value_t caps[] = { CAP_SETCAP, CAP_SYS_NICE };
+#endif
+
+#ifdef HAVE_CAPABILITY_H
+	cp = cap_get_proc();
+	cap_set_flag(cp, flag, 2, &caps, CAP_SET);
+	cap_set_proc(cp);
+#endif
 
         memset(&parm, 0, sizeof(parm));
 	parm.sched_priority = sched_get_priority_max(policy);
