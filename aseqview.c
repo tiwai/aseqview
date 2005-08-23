@@ -937,8 +937,9 @@ send_notes_off(channel_status_t *chst)
 	snd_seq_ev_set_subs(&tmpev);
 	snd_seq_ev_set_controller(&tmpev, chst->ch, MIDI_CTL_ALL_SOUNDS_OFF, 0);
 	port_write_event(chst->port->port, &tmpev, 1);
-	for (i = 0; i < NUM_KEYS; i++) {
-		piano_note_off(PIANO(chst->w_piano), i);
+	if (chst->w_piano) {
+		for (i = 0; i < NUM_KEYS; i++)
+			piano_note_off(PIANO(chst->w_piano), i);
 	}
 }
 
@@ -963,8 +964,9 @@ send_resets(channel_status_t *chst)
 	tmpev.data.control.param = 0;
 	tmpev.data.control.value = 256;
 	port_write_event(chst->port->port, &tmpev, 0);
-	for (i = 0; i < NUM_KEYS; i++) {
-		piano_note_off(PIANO(chst->w_piano), i);
+	if (chst->w_piano) {
+		for (i = 0; i < NUM_KEYS; i++)
+			piano_note_off(PIANO(chst->w_piano), i);
 	}
 }
 
@@ -1361,8 +1363,9 @@ reset_all(midi_status_t *st)
 			else
 				chst->is_drum = 0;
 			set_vel_bar_color(chst->w_vel, chst->is_drum, 0);
-			for (j = 0; j < NUM_KEYS; j++) {
-				piano_note_off(PIANO(chst->w_piano), j);
+			if (chst->w_piano) {
+				for (j = 0; j < NUM_KEYS; j++)
+					piano_note_off(PIANO(chst->w_piano), j);
 			}
 		}
 		if (is_redirect(port))
