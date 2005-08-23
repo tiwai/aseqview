@@ -1,3 +1,6 @@
+0.2.3	- Added piano support by Patrick Horn <patrick.horn@mindspring.com>
+	  (piano code is taken from swami)
+
 0.2.2	- Support gtk+-2.x.
 	  use --enable-gtk2 option for configure.
 

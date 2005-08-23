@@ -8,6 +8,7 @@ man_MANS = aseqview.1
 aseqview_SOURCES = \
 	aseqview.c \
 	levelbar.c levelbar.h \
+	piano.c piano.h \
 	portlib.c portlib.h
 
 aseqview_LDADD = @ASEQVIEW_LIBS@

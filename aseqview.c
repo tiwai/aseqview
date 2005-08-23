@@ -31,6 +31,7 @@
 #include <pthread.h>
 #include "levelbar.h"
 #include "portlib.h"
+#include "piano.h" // From swami.
 
 #define KEY_UNKNOWN	(-1)
 #define MIDI_CHANNELS	16
@@ -75,6 +76,7 @@ struct channel_status_t {
 	GtkWidget *w_chnum, *w_prog;
 	GtkWidget *w_vel, *w_main, *w_exp;
 	GtkWidget *w_pan, *w_pitch;
+	GtkWidget *w_piano;
 };
 
 enum {
@@ -116,7 +118,7 @@ enum {
 	V_EXP,
 	V_PAN,
 	V_PITCH,
-	/*V_PIANO,*/
+	V_PIANO,
 	V_COLS
 };
 
@@ -783,6 +785,10 @@ create_viewer_titles(GtkWidget *table)
 	w = gtk_label_new("Pitch");
 	gtk_table_attach_defaults(GTK_TABLE(table), w, V_PITCH, V_PITCH+1, 0, 1);
 	gtk_widget_show(w);
+
+	w = gtk_label_new("Piano");
+	gtk_table_attach_defaults(GTK_TABLE(table), w, V_PIANO, V_PIANO+1, 0, 1);
+	gtk_widget_show(w);
 }
 
 
@@ -875,12 +881,13 @@ create_channel_viewer(GtkWidget *table, port_status_t *st, int ch)
 	chst->w_pitch = w;
 
 	/* piano */
-	/*
-	w = create_piano;
-I	gtk_table_attach_defaults(GTK_TABLE(table), w, V_PIANO, V_PIANO + 1,
+	
+	w = piano_new(NULL);
+	gtk_table_attach_defaults(GTK_TABLE(table), w, V_PIANO, V_PIANO + 1,
 	top, bottom);
+	chst->w_piano = w;
 	gtk_widget_show(w);
-	*/
+	
 }
 
 
@@ -909,12 +916,16 @@ static void
 send_notes_off(channel_status_t *chst)
 {
 	snd_seq_event_t tmpev;
+	int i;
 
 	snd_seq_ev_clear(&tmpev);
 	snd_seq_ev_set_direct(&tmpev);
 	snd_seq_ev_set_subs(&tmpev);
 	snd_seq_ev_set_controller(&tmpev, chst->ch, MIDI_CTL_ALL_SOUNDS_OFF, 0);
 	port_write_event(chst->port->port, &tmpev, 1);
+	for (i = 0; i < NUM_KEYS; i++) {
+		piano_note_off(PIANO(chst->w_piano), i);
+	}
 }
 
 /*
@@ -925,6 +936,7 @@ static void
 send_resets(channel_status_t *chst)
 {
 	snd_seq_event_t tmpev;
+	int i;
 
 	snd_seq_ev_clear(&tmpev);
 	snd_seq_ev_set_direct(&tmpev);
@@ -937,6 +949,9 @@ send_resets(channel_status_t *chst)
 	tmpev.data.control.param = 0;
 	tmpev.data.control.value = 256;
 	port_write_event(chst->port->port, &tmpev, 0);
+	for (i = 0; i < NUM_KEYS; i++) {
+		piano_note_off(PIANO(chst->w_piano), i);
+	}
 }
 
 /*
@@ -968,6 +983,11 @@ resume_notes_on(channel_status_t *chst)
 				vel = 127;
 			snd_seq_ev_set_noteon(&tmpev, chst->ch, key, vel);
 			port_write_event(port->port, &tmpev, 0);
+			if (chst->w_piano)
+				piano_note_on(PIANO(chst->w_piano), key);
+		} else {
+			if (chst->w_piano)
+				piano_note_off(PIANO(chst->w_piano), i);
 		}
 	}
 	port_flush_event(port->port);
@@ -1172,6 +1192,13 @@ change_note(port_status_t *port, int ch, int key, int vel, int in_buf)
 			av_channel_update(chst->w_vel, chst->max_vel, in_buf);
 		}
 	}
+	if (chst->vel[key]>0) {
+		if (chst->w_piano)
+			piano_note_on(PIANO(chst->w_piano), key);
+	} else {
+		if (chst->w_piano)
+			piano_note_off(PIANO(chst->w_piano), key);
+	}
 }
 
 /*
@@ -1298,7 +1325,7 @@ reset_controllers(channel_status_t *chst, int in_buf)
 static void
 reset_all(midi_status_t *st)
 {
-	int i, p;
+	int i, p, j;
 
 	st->midi_mode = MIDI_MODE_GM;
 	st->timer_update = TRUE;
@@ -1320,6 +1347,9 @@ reset_all(midi_status_t *st)
 			else
 				chst->is_drum = 0;
 			set_vel_bar_color(chst->w_vel, chst->is_drum, 0);
+			for (j = 0; j < NUM_KEYS; j++) {
+				piano_note_off(PIANO(chst->w_piano), j);
+			}
 		}
 		if (is_redirect(port))
 			port_flush_event(port->port);

@@ -338,7 +338,7 @@ draw_arrow(GtkWidget *w, status_bar_t *arg)
 			   w->style->black_gc,
 			   TRUE,
 			   0, 0, arg->width, arg->height);
-	p[0].x = arg->drawn;
+	p[0].x = arg->drawn+1;
 	p[0].y = arg->height / 2;
 	p[1].x = arg->width - arg->drawn - 1;
 	p[1].y = 0;
