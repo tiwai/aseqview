@@ -122,6 +122,10 @@ enum {
 	V_COLS
 };
 
+static int show_piano = TRUE;
+static int aseqview_cols = V_COLS;
+
+
 /*
  * prototypes
  */
@@ -192,6 +196,7 @@ static struct option long_option[] = {
 	{"help", 0, NULL, 'h'},
 	{"thread", 0, NULL, 't'},
 	{"nothread", 0, NULL, 'm'},
+	{"nopiano", 0, NULL, 'P'},
 	{NULL, 0, NULL, 0},
 };
 
@@ -205,7 +210,7 @@ int main(int argc, char **argv)
 
 	gtk_init(&argc, &argv);
 
-	while ((c = getopt_long(argc, argv, "ors:d:p:tm", long_option, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "ors:d:p:tmP", long_option, NULL)) != -1) {
 		switch (c) {
 		case 'o':
 			do_output = FALSE;
@@ -233,6 +238,11 @@ int main(int argc, char **argv)
 			break;
 		case 'm':
 			use_thread = FALSE;
+			break;
+		case 'P':
+			show_piano = FALSE;
+			aseqview_cols = V_COLS - 1;
+			fprintf(stderr, "don't show piano..\n");
 			break;
 		default:
 			usage();
@@ -553,7 +563,7 @@ usage(void)
 {
 	printf("%s - ALSA sequencer event viewer / filter\n", PACKAGE);
 	printf("  ver.%s\n", VERSION);
-	printf("  Copyright (c) 1999-2000 by Takashi Iwai <iwai@ww.uni-erlangen.de>\n");
+	printf("  Copyright (c) 1999-2005 by Takashi Iwai <tiwai@suse.de>\n");
 	printf("\n");
 		
 	printf("usage: %s [-options]\n", PACKAGE);
@@ -564,6 +574,7 @@ usage(void)
 	printf("   -d,--dest addr    output to specified addr (client:port)\n");
 	printf("   -t,--thread       use multi-threads (default)\n");
 	printf("   -m,--nothread     don't use multi-threads\n");
+	printf("   -P,--nopiano      don't show piano\n");
 }
 
 
@@ -738,8 +749,8 @@ create_viewer(port_status_t *port)
 	GtkWidget *table;
 	int i;
 
-	table = gtk_table_new(V_COLS, MIDI_CHANNELS + 1, FALSE);
-	for (i = 0; i < V_COLS - 1; i++)
+	table = gtk_table_new(aseqview_cols, MIDI_CHANNELS + 1, FALSE);
+	for (i = 0; i < aseqview_cols - 1; i++)
 		gtk_table_set_col_spacing(GTK_TABLE(table), i, 4);
 	create_viewer_titles(table);
 	for (i = 0; i < MIDI_CHANNELS; i++)
@@ -786,9 +797,11 @@ create_viewer_titles(GtkWidget *table)
 	gtk_table_attach_defaults(GTK_TABLE(table), w, V_PITCH, V_PITCH+1, 0, 1);
 	gtk_widget_show(w);
 
-	w = gtk_label_new("Piano");
-	gtk_table_attach_defaults(GTK_TABLE(table), w, V_PIANO, V_PIANO+1, 0, 1);
-	gtk_widget_show(w);
+	if (show_piano) {
+		w = gtk_label_new("Piano");
+		gtk_table_attach_defaults(GTK_TABLE(table), w, V_PIANO, V_PIANO+1, 0, 1);
+		gtk_widget_show(w);
+	}
 }
 
 
@@ -881,12 +894,13 @@ create_channel_viewer(GtkWidget *table, port_status_t *st, int ch)
 	chst->w_pitch = w;
 
 	/* piano */
-	
-	w = piano_new(NULL);
-	gtk_table_attach_defaults(GTK_TABLE(table), w, V_PIANO, V_PIANO + 1,
-	top, bottom);
-	chst->w_piano = w;
-	gtk_widget_show(w);
+	if (show_piano) {
+		w = piano_new(NULL);
+		gtk_table_attach_defaults(GTK_TABLE(table), w, V_PIANO, V_PIANO + 1,
+					  top, bottom);
+		chst->w_piano = w;
+		gtk_widget_show(w);
+	}
 	
 }
 

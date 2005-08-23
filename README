@@ -2,7 +2,7 @@
 	ASeqView - ALSA sequencer event viewer / filter
 		ver.0.2.0
 
-	Takashi Iwai <iwai@ww.uni-erlangen.de>
+	Takashi Iwai <tiwai@suse.de>
 ================================================================
 
 INTRODUCTION
@@ -102,6 +102,9 @@ COMMANDLINE OPTIONS
    -m
 	Run without multi-threading.
 
+   -P
+	Don't show piano bars.
+
 TODO
 ====
 
@@ -113,6 +116,6 @@ TODO
 COPYRIGHT
 =========
 
-Copyright (c) 1999-2000 by Takashi Iwai <iwai@ww.uni-erlangen.de>
+Copyright (c) 1999-2000 by Takashi Iwai <tiwai@suse.de>
 Distribution under GPL 2 - see COPYING
 

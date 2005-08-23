@@ -1,7 +1,7 @@
 /*
  * routines to handle single client/port data
  *
- * Copyright (c) 1999 by Takashi Iwai <iwai@ww.uni-erlangen.de>
+ * Copyright (c) 1999 by Takashi Iwai <tiwai@suse.de>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
