@@ -361,7 +361,7 @@ piano_realize (GtkWidget * widget)
 
   gdk_window_set_user_data (widget->window, widget);
 
-  gtk_style_set_background (widget->style, widget->window, GTK_STATE_ACTIVE);
+  gtk_style_set_background (widget->style, widget->window, GTK_STATE_NORMAL);
 
   pixmap = gdk_pixmap_new (piano->widget.window, PIANO_DEFAULT_SIZEX, PIANO_DEFAULT_SIZEY, -1);
   gdk_draw_rectangle (pixmap, piano->widget.style->white_gc, TRUE, 1,
