@@ -144,6 +144,7 @@ static GtkWidget *create_viewer(port_status_t *port);
 static void create_viewer_titles(GtkWidget *table);
 static void set_vel_bar_color(GtkWidget *w, int is_drum, int in_buf);
 static void av_channel_update(GtkWidget *w, int val, int in_buf);
+static void av_note_update(GtkWidget *w, int key, int note_on, int in_buf);
 static void create_channel_viewer(GtkWidget *table, port_status_t *st, int ch);
 static void mute_channel(GtkToggleButton *w, channel_status_t *chst);
 static void send_notes_off(channel_status_t *chst);
@@ -379,6 +380,8 @@ static int av_ringbuf_read(int *type, GtkWidget **w, long *data)
 enum {
 	VEL_COLOR,
 	UPDATE_STATUS,
+	NOTE_ON,
+	NOTE_OFF,
 	UPDATE_PGM,
 	UPDATE_MODE
 };
@@ -416,6 +419,12 @@ idle_cb(gpointer data)
 			break;
 		case UPDATE_MODE:
 			expose_midi_mode(w);
+			break;
+		case NOTE_ON:
+			av_note_update(w, val, 1, 0);
+			break;
+		case NOTE_OFF:
+			av_note_update(w, val, 0, 0);
 			break;
 		}
 	}
@@ -937,10 +946,6 @@ send_notes_off(channel_status_t *chst)
 	snd_seq_ev_set_subs(&tmpev);
 	snd_seq_ev_set_controller(&tmpev, chst->ch, MIDI_CTL_ALL_SOUNDS_OFF, 0);
 	port_write_event(chst->port->port, &tmpev, 1);
-	if (chst->w_piano) {
-		for (i = 0; i < NUM_KEYS; i++)
-			piano_note_off(PIANO(chst->w_piano), i);
-	}
 }
 
 /*
@@ -964,10 +969,6 @@ send_resets(channel_status_t *chst)
 	tmpev.data.control.param = 0;
 	tmpev.data.control.value = 256;
 	port_write_event(chst->port->port, &tmpev, 0);
-	if (chst->w_piano) {
-		for (i = 0; i < NUM_KEYS; i++)
-			piano_note_off(PIANO(chst->w_piano), i);
-	}
 }
 
 /*
@@ -999,11 +1000,6 @@ resume_notes_on(channel_status_t *chst)
 				vel = 127;
 			snd_seq_ev_set_noteon(&tmpev, chst->ch, key, vel);
 			port_write_event(port->port, &tmpev, 0);
-			if (chst->w_piano)
-				piano_note_on(PIANO(chst->w_piano), key);
-		} else {
-			if (chst->w_piano)
-				piano_note_off(PIANO(chst->w_piano), i);
 		}
 	}
 	port_flush_event(port->port);
@@ -1085,6 +1081,24 @@ av_channel_update(GtkWidget *w, int val, int in_buf)
 		av_ringbuf_write(UPDATE_STATUS, w, val);
 	} else
 		channel_status_bar_update(w, val);
+}
+
+/*
+ */
+static void
+av_note_update(GtkWidget *w, int key, int note_on, int in_buf)
+{
+	if (in_buf) {
+		if (note_on)
+			av_ringbuf_write(NOTE_ON, w, key);
+		else
+			av_ringbuf_write(NOTE_OFF, w, key);
+	} else {
+		if (note_on)
+			piano_note_on(PIANO(w), key);
+		else
+			piano_note_off(PIANO(w), key);
+	}
 }
 
 /*
@@ -1208,12 +1222,11 @@ change_note(port_status_t *port, int ch, int key, int vel, int in_buf)
 			av_channel_update(chst->w_vel, chst->max_vel, in_buf);
 		}
 	}
-	if (chst->vel[key]>0) {
-		if (chst->w_piano)
-			piano_note_on(PIANO(chst->w_piano), key);
-	} else {
-		if (chst->w_piano)
-			piano_note_off(PIANO(chst->w_piano), key);
+	if (show_piano) {
+		if (chst->vel[key] > 0)
+			av_note_update(chst->w_piano, key, 1, in_buf);
+		else
+			av_note_update(chst->w_piano, key, 0, in_buf);
 	}
 }
 
