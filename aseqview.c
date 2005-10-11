@@ -243,7 +243,6 @@ int main(int argc, char **argv)
 		case 'P':
 			show_piano = FALSE;
 			aseqview_cols = V_COLS - 1;
-			fprintf(stderr, "don't show piano..\n");
 			break;
 		default:
 			usage();
