@@ -180,7 +180,6 @@ static void display_midi_mode(GtkWidget *, int);
 static void display_temper_keysig(GtkWidget *, int);
 static void display_temper_type(GtkWidget *, int);
 static void av_ringbuf_init(void);
-static void av_ringbuf_clear(void);
 static int av_ringbuf_read(int *, GtkWidget **, long *);
 static int av_ringbuf_write(int, GtkWidget *, long);
 static void *midi_loop(void *);
@@ -1281,8 +1280,6 @@ static void reset_all(midi_status_t *st, int in_buf)
 	port_status_t *port;
 	channel_status_t *chst;
 	
-	if (in_buf)
-		av_ringbuf_clear();
 	for (p = 0; p < st->num_ports; p++) {
 		if ((port = &st->ports[p])->index < 0)
 			continue;
@@ -1460,11 +1457,6 @@ static void av_ringbuf_init(void)
 	}
 	memset(ringbuf, 0, sizeof(struct av_ringbuf) * RINGBUF_SIZE);
 	ringbuf_rdptr = ringbuf_wrptr = 0;
-}
-
-static void av_ringbuf_clear(void)
-{
-	ringbuf_rdptr = ringbuf_wrptr;
 }
 
 /*
