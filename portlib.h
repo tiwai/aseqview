@@ -58,7 +58,7 @@ typedef int (*port_callback_t)(port_t *p, int type, snd_seq_event_t *ev, void *p
 #define PORT_CAP_WR	(SND_SEQ_PORT_CAP_WRITE|SND_SEQ_PORT_CAP_SUBS_WRITE)
 #define PORT_CAP_ALL	(PORT_CAP_RD|PORT_CAP_WR)
 
-port_client_t *port_client_new(char *name, int mode);
+port_client_t *port_client_new(char *name, int mode, int use_pthread);
 void port_client_delete(port_client_t *p);
 port_t *port_attach(port_client_t *p, char *name, unsigned int cap, unsigned int type);
 int port_detach(port_t *p);

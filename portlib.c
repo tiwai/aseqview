@@ -45,6 +45,8 @@ struct port_client_t {
 	int num_ports;
 	port_t *ports;
 	int running;
+	int use_pthread;
+	pthread_mutex_t *lock;
 };
 
 struct port_t {
@@ -84,9 +86,36 @@ static void error_handler(const char *file, int line, const char *func, int err,
 
 
 /*
+ */
+static void MUTEX_INIT(port_client_t *client, int use_pthread)
+{
+	client->use_pthread = use_pthread;
+	if (use_pthread)
+		pthread_mutex_init(&client->lock, NULL);
+}
+
+static void MUTEX_DESTROY(port_client_t *client)
+{
+	if (client->use_pthread)
+		pthread_mutex_destroy(&client->lock);
+}
+
+static void MUTEX_LOCK(port_client_t *client)
+{
+	if (client->use_pthread)
+		pthread_mutex_lock(&client->lock);
+}
+
+static void MUTEX_UNLOCK(port_client_t *client)
+{
+	if (client->use_pthread)
+		pthread_mutex_unlock(&client->lock);
+}
+
+/*
  * create a client by non-blocking mode
  */
-port_client_t *port_client_new(char *name, int mode)
+port_client_t *port_client_new(char *name, int mode, int use_pthread)
 {
 	port_client_t *client;
 
@@ -106,6 +135,7 @@ port_client_t *port_client_new(char *name, int mode)
 	client->mode = mode;
 	client->num_ports = 0;
 	client->ports = NULL;
+	MUTEX_INIT(client, use_pthread);
 	
 	if (snd_seq_set_client_name(client->seq, name) < 0)
 		error("set client info");
@@ -125,6 +155,7 @@ void port_client_delete(port_client_t *client)
 			next = p->next;
 			free(p);
 		}
+		MUTEX_DESTROY(client);
 		free(client);
 	}
 }
@@ -202,7 +233,7 @@ void port_client_do_loop(port_client_t *client, int timeout)
 	client->running = 1;
 	while (client->running) {
 		if (poll(pfd, npfds, timeout) < 0)
-			error("poll");
+			continue;
 		if (port_client_do_event(client))
 			break;
 	}
@@ -244,7 +275,9 @@ port_client_do_event(port_client_t *client)
 		if (rc < 0)
 			return rc;
 	}
+	MUTEX_LOCK(client);
 	snd_seq_flush_output(client->seq);
+	MUTEX_UNLOCK(client);
 	return 0;
 }
 
@@ -364,10 +397,15 @@ int port_write_event(port_t *p, snd_seq_event_t *ev, int flush)
 	int rc;
 
 	snd_seq_ev_set_source(ev, p->port);
-	if ((rc = snd_seq_event_output(p->client->seq, ev)) < 0)
+	MUTEX_LOCK(p->client);
+	rc = snd_seq_event_output(p->client->seq, ev);
+	if (rc < 0) {
+		MUTEX_UNLOCK(p->client);
 		return rc;
+	}
 	if (flush)
 		snd_seq_flush_output(p->client->seq);
+	MUTEX_UNLOCK(p->client);
 	return rc;
 }
 
@@ -376,7 +414,11 @@ int port_write_event(port_t *p, snd_seq_event_t *ev, int flush)
  */
 int port_flush_event(port_t *p)
 {
-	return snd_seq_flush_output(p->client->seq);
+	int err;
+	MUTEX_LOCK(p->client);
+	err = snd_seq_flush_output(p->client->seq);
+	MUTEX_UNLOCK(p->client);
+	return err;
 }
 
 /*

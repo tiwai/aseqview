@@ -1,3 +1,5 @@
+0.2.5	- Fix possible segfaults due to races in thread mode
+	
 0.2.4	- Added MIDI Tunig Standard (MTS) feature
 	  by TAMUKI Shoichi <tamuki@linet.gr.jp>
 
