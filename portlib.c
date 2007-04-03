@@ -46,7 +46,7 @@ struct port_client_t {
 	port_t *ports;
 	int running;
 	int use_pthread;
-	pthread_mutex_t *lock;
+	pthread_mutex_t lock;
 };
 
 struct port_t {
