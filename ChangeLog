@@ -1,3 +1,6 @@
+0.2.6	- Fix segfault with thread mode (silly typo)
+	- Add mute-control feature by TAMUKI Shoichi
+
 0.2.5	- Fix possible segfaults due to races in thread mode
 	
 0.2.4	- Added MIDI Tunig Standard (MTS) feature

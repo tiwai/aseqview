@@ -90,8 +90,9 @@ struct midi_status_t {
 	int midi_mode;
 	int temper_keysig;
 	int timer_update, queue;
+	int temper_type_mute;
 	int pitch_adj, vel_scale;
-	GtkWidget *w_midi_mode, *w_temper_keysig, *w_time;
+	GtkWidget *w_midi_mode, *w_temper_keysig, *w_time, *w_tt_button[8];
 	GdkPixmap *w_gm_xpm, *w_gs_xpm, *w_xg_xpm;
 	GdkPixmap *w_gm_xpm_off, *w_gs_xpm_off, *w_xg_xpm_off;
 	GdkPixmap *w_tk_xpm[32], *w_tk_xpm_adj[32], *w_tt_xpm[9];
@@ -111,6 +112,7 @@ enum {
 };
 
 enum {
+	UPDATE_MUTE,
 	VEL_COLOR,
 	UPDATE_STATUS,
 	NOTE_ON,
@@ -119,7 +121,8 @@ enum {
 	UPDATE_PGM,
 	UPDATE_MODE,
 	UPDATE_TEMPER_KEYSIG,
-	UPDATE_TEMPER_TYPE
+	UPDATE_TEMPER_TYPE,
+	HIDE_TT_BUTTON
 };
 
 enum {
@@ -147,6 +150,7 @@ static int expose_midi_mode(GtkWidget *);
 static int expose_temper_keysig(GtkWidget *);
 static int expose_temper_type(GtkWidget *);
 static int update_time(GtkWidget *);
+static void suppress_temper_type(GtkToggleButton *, midi_status_t *);
 static GtkWidget *create_pitch_changer(midi_status_t *);
 static void adjust_pitch(GtkAdjustment *, midi_status_t *);
 static GtkWidget *create_velocity_changer(midi_status_t *);
@@ -171,6 +175,7 @@ static void visualize_temper_type(midi_status_t *, int);
 static void reset_all(midi_status_t *, int);
 static void send_resets(channel_status_t *);
 static int is_redirect(port_status_t *);
+static void av_mute_update(GtkWidget *, int, int);
 static void set_vel_bar_color(GtkWidget *, int, int);
 static void av_channel_update(GtkWidget *, int, int);
 static void av_note_update(GtkWidget *, int, int, int);
@@ -179,6 +184,7 @@ static void av_program_update(GtkWidget *, char *, int);
 static void display_midi_mode(GtkWidget *, int);
 static void display_temper_keysig(GtkWidget *, int);
 static void display_temper_type(GtkWidget *, int);
+static void av_hide_tt_button(GtkWidget *, int, int);
 static void av_ringbuf_init(void);
 static int av_ringbuf_read(int *, GtkWidget **, long *);
 static int av_ringbuf_write(int, GtkWidget *, long);
@@ -613,10 +619,12 @@ static void mute_channel(GtkToggleButton *w, channel_status_t *chst)
 static GtkWidget *display_midi_init(GtkWidget *window, midi_status_t *st)
 {
 	int i;
-	GtkWidget *vbox, *hbox, *w;
+	GtkWidget *vbox, *hbox, *w, *table;
+	gchar *tmp[] = { "eq.", "Py.", "mt.", "pu.", "u0", "u1", "u2", "u3" };
 	
 	st->midi_mode = MIDI_MODE_GM;
 	st->temper_keysig = TEMPER_UNKNOWN;
+	st->temper_type_mute = 0;
 	st->w_gm_xpm = create_midi_pixmap(window,
 			gm_bits, gm_width, gm_height, 1, NULL);
 	st->w_gs_xpm = create_midi_pixmap(window,
@@ -640,6 +648,7 @@ static GtkWidget *display_midi_init(GtkWidget *window, midi_status_t *st)
 				tt_bits[i], tt_width, tt_height, 2, tt_rgb[i]);
 	vbox = gtk_vbox_new(FALSE, 0);
 	hbox = gtk_hbox_new(FALSE, 0);
+	gtk_container_border_width(GTK_CONTAINER(hbox), 10);
 	w = st->w_midi_mode = gtk_drawing_area_new();
 	gtk_drawing_area_size(GTK_DRAWING_AREA(w),
 			gm_width + gs_width + xg_width + 20, gm_height);
@@ -659,11 +668,28 @@ static GtkWidget *display_midi_init(GtkWidget *window, midi_status_t *st)
 	gtk_widget_show(w);
 	gtk_box_pack_start(GTK_BOX(vbox), hbox, TRUE, TRUE, 0);
 	gtk_widget_show(hbox);
+	hbox = gtk_hbox_new(FALSE, 0);
+	gtk_container_border_width(GTK_CONTAINER(hbox), 10);
 	w = st->w_time = gtk_label_new("00:00");
 	gtk_object_set_user_data(GTK_OBJECT(w), st);
 	gtk_timeout_add(1000, (GtkFunction) update_time, (gpointer) w);
-	gtk_box_pack_start(GTK_BOX(vbox), w, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(hbox), w, TRUE, TRUE, 0);
 	gtk_widget_show(w);
+	table = gtk_table_new(4, 2, FALSE);
+	for (i = 0; i < 8; i++) {
+		w = st->w_tt_button[i] = gtk_toggle_button_new_with_label(tmp[i]);
+		gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(w), FALSE);
+		gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(w), TRUE);
+		gtk_signal_connect(GTK_OBJECT(w), "clicked",
+				GTK_SIGNAL_FUNC(suppress_temper_type), st);
+		gtk_table_attach_defaults(GTK_TABLE(table),
+				w, i % 4, i % 4 + 1, i / 4, i / 4 + 1);
+		gtk_widget_show(w);
+	}
+	gtk_box_pack_start(GTK_BOX(hbox), table, TRUE, TRUE, 0);
+	gtk_widget_show(table);
+	gtk_box_pack_start(GTK_BOX(vbox), hbox, TRUE, TRUE, 0);
+	gtk_widget_show(hbox);
 	return vbox;
 }
 
@@ -752,7 +778,7 @@ static int expose_temper_type(GtkWidget *w)
 	int x_ofs = (width - tt_width) / 2;
 	int y_ofs = (height - tt_height - 6) / 2;
 	
-	i = (tk == TEMPER_UNKNOWN) ? 0 : ((tt < 0x40) ? tt : tt - 0x3c) + 1;
+	i = (tk == TEMPER_UNKNOWN) ? 0 : tt - ((tt >= 0x40) ? 0x3c : 0) + 1;
 	p = st->w_tt_xpm[i];
 	gdk_draw_pixmap(w->window, w->style->fg_gc[GTK_STATE_NORMAL], p, 0, 0,
 			x_ofs, y_ofs, tt_width, tt_height);
@@ -788,6 +814,29 @@ static int update_time(GtkWidget *w)
 		}
 	}
 	return TRUE;
+}
+
+/*
+ */
+static void suppress_temper_type(GtkToggleButton *w, midi_status_t *st)
+{
+	int i, p;
+	port_status_t *port;
+	channel_status_t *chst;
+	
+	for (i = 0; i < 8; i++)
+		if (w == GTK_TOGGLE_BUTTON(st->w_tt_button[i]))
+			st->temper_type_mute ^= 1 << i;
+	for (p = 0; p < st->num_ports; p++) {
+		if ((port = &st->ports[p])->index < 0)
+			continue;
+		for (i = 0; i < MIDI_CHANNELS; i++) {
+			chst = &port->ch[i];
+			av_mute_update(chst->w_chnum,
+					st->temper_type_mute & 1 << chst->temper_type
+					- ((chst->temper_type >= 0x40) ? 0x3c : 0), use_thread);
+		}
+	}
 }
 
 /*
@@ -988,17 +1037,14 @@ static void redirect_event(port_status_t *port, snd_seq_event_t *ev)
 {
 	int key, vel, key_saved, vel_saved;
 	
-	if (snd_seq_ev_is_channel_type(ev)) {
-		/* normal MIDI events - check channel */
-		if (ev->data.note.channel >= MIDI_CHANNELS)
-			return;
-		/* abondoned if muted */
+	/* normal MIDI events - check channel */
+	if (snd_seq_ev_is_channel_type(ev)
+			&& ev->data.note.channel >= MIDI_CHANNELS)
+		return;
+	if (snd_seq_ev_is_note_type(ev)) {
+		/* abandoned if muted */
 		if (port->ch[ev->data.note.channel].mute)
 			return;
-	}
-	snd_seq_ev_set_direct(ev);
-	snd_seq_ev_set_subs(ev);
-	if (snd_seq_ev_is_note_type(ev)) {
 		/* modify key / velocity for note events */
 		key_saved = ev->data.note.note;
 		vel_saved = ev->data.note.velocity;
@@ -1012,11 +1058,16 @@ static void redirect_event(port_status_t *port, snd_seq_event_t *ev)
 			vel = 127;
 		ev->data.note.note = key;
 		ev->data.note.velocity = vel;
+		snd_seq_ev_set_direct(ev);
+		snd_seq_ev_set_subs(ev);
 		port_write_event(port->port, ev, 0);
 		ev->data.note.note = key_saved;
 		ev->data.note.velocity = vel_saved;
-	} else
+	} else {
+		snd_seq_ev_set_direct(ev);
+		snd_seq_ev_set_subs(ev);
 		port_write_event(port->port, ev, 0);
+	}
 }
 
 /*
@@ -1050,8 +1101,7 @@ static void change_note(port_status_t *port,
 		}
 	}
 	if (show_piano)
-		av_note_update(chst->w_piano,
-				key, (chst->vel[key] > 0) ? 1 : 0, in_buf);
+		av_note_update(chst->w_piano, key, (chst->vel[key] > 0), in_buf);
 }
 
 /*
@@ -1178,7 +1228,7 @@ static void parse_sysex(port_status_t *port,
 		0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00
 	};
 	midi_status_t *st = port->main;
-	int p, tt, i;
+	int p, need_visualize = FALSE, tt, i;
 	channel_status_t *chst;
 	
 	if (len <= 0 || buf[0] != 0xf0)
@@ -1225,9 +1275,11 @@ static void parse_sysex(port_status_t *port,
 		switch (buf[3]) {
 		case 0x0a:
 			if (st->temper_keysig == TEMPER_UNKNOWN)
-				visualize_temper_type(st, in_buf);
+				need_visualize = TRUE;
 			st->temper_keysig = buf[4] - 0x40 + buf[5] * 16;
 			display_temper_keysig(st->w_temper_keysig, in_buf);
+			if (need_visualize)
+				visualize_temper_type(st, in_buf);
 			break;
 		case 0x0b:
 			tt = (buf[4] & 0x03) << 14 | buf[5] << 7 | buf[6];
@@ -1238,6 +1290,10 @@ static void parse_sysex(port_status_t *port,
 						chst = &port->ch[i];
 						chst->temper_type = buf[7];
 						display_temper_type(chst->w_temper_type, in_buf);
+						if (st->temper_type_mute)
+							av_mute_update(chst->w_chnum,
+									st->temper_type_mute & 1 << buf[7]
+									- ((buf[7] >= 0x40) ? 0x3c : 0), in_buf);
 					}
 			break;
 		}
@@ -1269,6 +1325,8 @@ static void visualize_temper_type(midi_status_t *st, int in_buf)
 			display_temper_type(chst->w_temper_type, in_buf);
 		}
 	}
+	for (i = 0; i < 8; i++)
+		av_hide_tt_button(st->w_tt_button[i], FALSE, in_buf);
 }
 
 /*
@@ -1276,7 +1334,7 @@ static void visualize_temper_type(midi_status_t *st, int in_buf)
  */
 static void reset_all(midi_status_t *st, int in_buf)
 {
-	int p, i, j;
+	int p, i;
 	port_status_t *port;
 	channel_status_t *chst;
 	
@@ -1285,6 +1343,9 @@ static void reset_all(midi_status_t *st, int in_buf)
 			continue;
 		for (i = 0; i < MIDI_CHANNELS; i++) {
 			chst = &port->ch[i];
+			if (st->temper_type_mute)
+				av_mute_update(chst->w_chnum,
+						st->temper_type_mute & 1, in_buf);
 			all_sounds_off(chst, 0);
 			chst->is_drum = (i == 9) ? 1 : 0;
 			set_vel_bar_color(chst->w_vel, chst->is_drum, in_buf);
@@ -1306,6 +1367,8 @@ static void reset_all(midi_status_t *st, int in_buf)
 	st->temper_keysig = TEMPER_UNKNOWN;
 	display_temper_keysig(st->w_temper_keysig, 0);
 	st->timer_update = TRUE;
+	for (i = 0; i < 8; i++)
+		av_hide_tt_button(st->w_tt_button[i], TRUE, in_buf);
 }
 
 /*
@@ -1338,6 +1401,16 @@ static int is_redirect(port_status_t *port)
 {
 	return (do_output && port_num_subscription(port->port,
 			SND_SEQ_QUERY_SUBS_READ) > 0);
+}
+
+/*
+ */
+static void av_mute_update(GtkWidget *w, int is_mute, int in_buf)
+{
+	if (in_buf)
+		av_ringbuf_write(UPDATE_MUTE, w, is_mute);
+	else
+		gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(w), is_mute);
 }
 
 /*
@@ -1383,13 +1456,13 @@ static void av_note_update(GtkWidget *w, int key, int note_on, int in_buf)
  */
 static void av_piano_reset(GtkWidget *w, int in_buf)
 {
+	int i;
+	
 	if (in_buf)
 		av_ringbuf_write(PIANO_RESET, w, 0);
-	else {
-		int i;
+	else
 		for (i = 0; i < NUM_KEYS; i++)
-			av_note_update(w, i, 0, 0);
-	}
+			av_note_update(w, i, FALSE, 0);
 }
 
 /*
@@ -1430,6 +1503,16 @@ static void display_temper_type(GtkWidget *w, int in_buf)
 		av_ringbuf_write(UPDATE_TEMPER_TYPE, w, 0);
 	else
 		expose_temper_type(w);
+}
+
+/*
+ */
+static void av_hide_tt_button(GtkWidget *w, int is_hide, int in_buf)
+{
+	if (in_buf)
+		av_ringbuf_write(HIDE_TT_BUTTON, w, is_hide);
+	else
+		gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(w), is_hide);
 }
 
 /*
@@ -1510,12 +1593,15 @@ static void *midi_loop(void *arg)
  */
 static gboolean idle_cb(gpointer data)
 {
-	int type, i;
+	int type;
 	GtkWidget *w;
 	long val;
 	
 	while (av_ringbuf_read(&type, &w, &val)) {
 		switch (type) {
+		case UPDATE_MUTE:
+			av_mute_update(w, val, 0);
+			break;
 		case VEL_COLOR:
 			set_vel_bar_color(w, val, 0);
 			break;
@@ -1523,10 +1609,10 @@ static gboolean idle_cb(gpointer data)
 			av_channel_update(w, val, 0);
 			break;
 		case NOTE_ON:
-			av_note_update(w, val, 1, 0);
+			av_note_update(w, val, TRUE, 0);
 			break;
 		case NOTE_OFF:
-			av_note_update(w, val, 0, 0);
+			av_note_update(w, val, FALSE, 0);
 			break;
 		case PIANO_RESET:
 			av_piano_reset(w, 0);
@@ -1542,6 +1628,9 @@ static gboolean idle_cb(gpointer data)
 			break;
 		case UPDATE_TEMPER_TYPE:
 			display_temper_type(w, 0);
+			break;
+		case HIDE_TT_BUTTON:
+			av_hide_tt_button(w, val, 0);
 			break;
 		}
 	}
