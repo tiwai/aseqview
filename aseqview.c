@@ -33,6 +33,7 @@
 #include "piano.h" // From swami.
 #include "portlib.h"
 
+#define MAX_PORTS		20
 #define MIDI_CHANNELS	16
 #define NUM_KEYS		128
 #define NUM_CTRLS		128
@@ -90,11 +91,11 @@ struct midi_status_t {
 	int midi_mode;
 	int temper_keysig;
 	int timer_update, queue;
-	int temper_type_mute;
+	int temper_type_mute, tt_mute_save;
 	int pitch_adj, vel_scale;
 	GtkWidget *w_midi_mode, *w_temper_keysig, *w_time, *w_tt_button[8];
-	GdkPixmap *w_gm_xpm, *w_gs_xpm, *w_xg_xpm;
-	GdkPixmap *w_gm_xpm_off, *w_gs_xpm_off, *w_xg_xpm_off;
+	GdkPixmap *w_gm_xpm, *w_gm2_xpm, *w_gs_xpm, *w_xg_xpm;
+	GdkPixmap *w_gm_xpm_off, *w_gm2_xpm_off, *w_gs_xpm_off, *w_xg_xpm_off;
 	GdkPixmap *w_tk_xpm[32], *w_tk_xpm_adj[32], *w_tt_xpm[9];
 };
 
@@ -127,6 +128,7 @@ enum {
 
 enum {
 	MIDI_MODE_GM,
+	MIDI_MODE_GM2,
 	MIDI_MODE_GS,
 	MIDI_MODE_XG
 };
@@ -134,7 +136,7 @@ enum {
 /*
  * prototypes
  */
-static int parse_addr(char *, int *, int *);
+static int parse_addr(char *, int *, int *, int *);
 static void usage(void);
 static midi_status_t *midi_status_new(int);
 static void create_port_window(port_status_t *);
@@ -172,7 +174,7 @@ static void change_pitch(port_status_t *, int, int, int);
 static void parse_sysex(port_status_t *, int, unsigned char *, int);
 static int get_channel(unsigned char);
 static void visualize_temper_type(midi_status_t *, int);
-static void reset_all(midi_status_t *, int);
+static void reset_all(midi_status_t *, int, int, int);
 static void send_resets(channel_status_t *);
 static int is_redirect(port_status_t *);
 static void av_mute_update(GtkWidget *, int, int);
@@ -222,14 +224,16 @@ static struct option long_option[] = {
  */
 int main(int argc, char **argv)
 {
-	int c, p;
-	midi_status_t *st;
-	int src_client = -1, src_port;
-	int dest_client = -1, dest_port;
+	int p, c;
+	int src_client[MAX_PORTS], src_port[MAX_PORTS];
+	int dest_client[MAX_PORTS], dest_port[MAX_PORTS];
 	int num_ports = 1;
+	midi_status_t *st;
 	port_status_t *port;
 	
 	gtk_init(&argc, &argv);
+	for (p = 0; p < MAX_PORTS; p++)
+		src_client[p] = dest_client[p] = -1;
 	while ((c = getopt_long(argc, argv, "ors:d:p:tmP",
 			long_option, NULL)) != -1) {
 		switch (c) {
@@ -240,13 +244,13 @@ int main(int argc, char **argv)
 			rt_prio = TRUE;
 			break;
 		case 's':
-			if (parse_addr(optarg, &src_client, &src_port) < 0) {
+			if (parse_addr(optarg, src_client, src_port, &num_ports) < 0) {
 				fprintf(stderr, "invalid argument %s for -s\n", optarg);
 				return 1;
 			}
 			break;
 		case 'd':
-			if (parse_addr(optarg, &dest_client, &dest_port) < 0) {
+			if (parse_addr(optarg, dest_client, dest_port, &num_ports) < 0) {
 				fprintf(stderr, "invalid argument %s for -d\n", optarg);
 				return 1;
 			}
@@ -269,7 +273,7 @@ int main(int argc, char **argv)
 			return 1;
 		}
 	}
-	if (num_ports < 1 || num_ports > 20)
+	if (num_ports < 1 || num_ports > MAX_PORTS)
 		g_error("invalid port numbers %d\n", num_ports);
 	/* create instance */
 	st = midi_status_new(num_ports);
@@ -288,13 +292,17 @@ int main(int argc, char **argv)
 	if (use_thread)
 		av_ringbuf_init();
 	/* explicit subscription to ports */
-	if (src_client >= 0 && src_client != SND_SEQ_ADDRESS_SUBSCRIBERS)
-		port_connect_from(st->ports[0].port, src_client, src_port);
-	if (do_output && dest_client >= 0
-			&& dest_client != SND_SEQ_ADDRESS_SUBSCRIBERS) {
-		port_connect_to(st->ports[0].port, dest_client, dest_port);
-		reset_all(st, 0);
-	}
+	for (p = 0; p < num_ports; p++)
+		if (src_client[p] >= 0
+				&& src_client[p] != SND_SEQ_ADDRESS_SUBSCRIBERS)
+			port_connect_from(st->ports[p].port, src_client[p], src_port[p]);
+	for (p = 0; p < num_ports; p++)
+		if (do_output && dest_client[p] >= 0
+				&& dest_client[p] != SND_SEQ_ADDRESS_SUBSCRIBERS) {
+			port_connect_to(st->ports[p].port, dest_client[p], dest_port[p]);
+			if (p == 0)
+				reset_all(st, MIDI_MODE_GM, TRUE, FALSE);
+		}
 	if (use_thread) {
 		pthread_create(&midi_thread, NULL, midi_loop, st);
 		gtk_idle_add(idle_cb, st);
@@ -314,21 +322,34 @@ int main(int argc, char **argv)
 /*
  * parse client:port address from command line
  */
-static int parse_addr(char *arg, int *clientp, int *portp)
+static int parse_addr(char *arg, int *clientp, int *portp, int *num_ports)
 {
-	char *p;
+	int p;
+	char *q;
 	
-	if (isdigit(*arg)) {
-		if ((p = strpbrk(arg, ":.")) == NULL)
+	for (p = 0; clientp[p] >= 0; p++)
+		if (p == MAX_PORTS - 1)
 			return -1;
-		*clientp = atoi(arg);
-		*portp = atoi(p + 1);
-	} else {
-		if (*arg != 's' && *arg != 'S')
+	p--, arg--;
+	do {
+		p++;
+		if (p == MAX_PORTS)
 			return -1;
-		*clientp = SND_SEQ_ADDRESS_SUBSCRIBERS;
-		*portp = 0;
-	}
+		arg++;
+		if (isdigit(*arg)) {
+			if (!(q = strpbrk(arg, ":.")))
+				return -1;
+			clientp[p] = atoi(arg);
+			portp[p] = atoi(q + 1);
+		} else {
+			if (*arg != 's' && *arg != 'S')
+				return -1;
+			clientp[p] = SND_SEQ_ADDRESS_SUBSCRIBERS;
+			portp[p] = 0;
+		}
+	} while ((arg = strchr(arg, ',')));
+	if (*num_ports < p + 1)
+		*num_ports = p + 1;
 	return 0;
 }
 
@@ -402,6 +423,7 @@ static midi_status_t *midi_status_new(int num_ports)
 /*
  */
 #include "bitmaps/gm.xbm"
+#include "bitmaps/gm2.xbm"
 #include "bitmaps/gs.xbm"
 #include "bitmaps/xg.xbm"
 #include "tmprbits.h"
@@ -624,15 +646,19 @@ static GtkWidget *display_midi_init(GtkWidget *window, midi_status_t *st)
 	
 	st->midi_mode = MIDI_MODE_GM;
 	st->temper_keysig = TEMPER_UNKNOWN;
-	st->temper_type_mute = 0;
+	st->temper_type_mute = st->tt_mute_save = 0;
 	st->w_gm_xpm = create_midi_pixmap(window,
 			gm_bits, gm_width, gm_height, 1, NULL);
+	st->w_gm2_xpm = create_midi_pixmap(window,
+			gm2_bits, gm2_width, gm2_height, 1, NULL);
 	st->w_gs_xpm = create_midi_pixmap(window,
 			gs_bits, gs_width, gs_height, 1, NULL);
 	st->w_xg_xpm = create_midi_pixmap(window,
 			xg_bits, xg_width, xg_height, 1, NULL);
 	st->w_gm_xpm_off = create_midi_pixmap(window,
 			gm_bits, gm_width, gm_height, 0, NULL);
+	st->w_gm2_xpm_off = create_midi_pixmap(window,
+			gm2_bits, gm2_width, gm2_height, 0, NULL);
 	st->w_gs_xpm_off = create_midi_pixmap(window,
 			gs_bits, gs_width, gs_height, 0, NULL);
 	st->w_xg_xpm_off = create_midi_pixmap(window,
@@ -650,8 +676,7 @@ static GtkWidget *display_midi_init(GtkWidget *window, midi_status_t *st)
 	hbox = gtk_hbox_new(FALSE, 0);
 	gtk_container_border_width(GTK_CONTAINER(hbox), 10);
 	w = st->w_midi_mode = gtk_drawing_area_new();
-	gtk_drawing_area_size(GTK_DRAWING_AREA(w),
-			gm_width + gs_width + xg_width + 20, gm_height);
+	gtk_drawing_area_size(GTK_DRAWING_AREA(w), gm_width * 4 + 30, gm_height);
 	gtk_object_set_user_data(GTK_OBJECT(w), st);
 	gtk_signal_connect(GTK_OBJECT(w), "expose_event",
 			GTK_SIGNAL_FUNC(expose_midi_mode), NULL);
@@ -730,18 +755,21 @@ static int expose_midi_mode(GtkWidget *w)
 	midi_status_t *st = gtk_object_get_user_data(GTK_OBJECT(w));
 	int width = w->allocation.width;
 	int height = w->allocation.height;
-	int x_ofs = (width - gm_width - gs_width - xg_width - 20) / 2;
+	int x_ofs = (width - gm_width * 4 - 30) / 2;
 	int y_ofs = (height - gm_height) / 2;
 	
 	p = (st->midi_mode == MIDI_MODE_GM) ? st->w_gm_xpm : st->w_gm_xpm_off;
 	gdk_draw_pixmap(w->window, w->style->fg_gc[GTK_STATE_NORMAL], p, 0, 0,
 			x_ofs, y_ofs, gm_width, gm_height);
+	p = (st->midi_mode == MIDI_MODE_GM2) ? st->w_gm2_xpm : st->w_gm2_xpm_off;
+	gdk_draw_pixmap(w->window, w->style->fg_gc[GTK_STATE_NORMAL], p, 0, 0,
+			x_ofs + gm_width + 10, y_ofs, gm2_width, gm2_height);
 	p = (st->midi_mode == MIDI_MODE_GS) ? st->w_gs_xpm : st->w_gs_xpm_off;
 	gdk_draw_pixmap(w->window, w->style->fg_gc[GTK_STATE_NORMAL], p, 0, 0,
-			x_ofs + gm_width + 10, y_ofs, gs_width, gs_height);
+			x_ofs + gm_width * 2 + 20, y_ofs, gs_width, gs_height);
 	p = (st->midi_mode == MIDI_MODE_XG) ? st->w_xg_xpm : st->w_xg_xpm_off;
 	gdk_draw_pixmap(w->window, w->style->fg_gc[GTK_STATE_NORMAL], p, 0, 0,
-			x_ofs + gm_width + gs_width + 20, y_ofs, xg_width, xg_height);
+			x_ofs + gm_width * 3 + 30, y_ofs, xg_width, xg_height);
 	return FALSE;
 }
 
@@ -972,7 +1000,7 @@ static int port_subscribed(port_t *p,
 		int type, snd_seq_event_t *ev, port_status_t *port)
 {
 	if (port_num_subscription(p, SND_SEQ_QUERY_SUBS_READ) == 1)
-		reset_all(port->main, use_thread);
+		reset_all(port->main, MIDI_MODE_GM, TRUE, use_thread);
 	return 0;
 }
 
@@ -984,7 +1012,7 @@ static int port_unused(port_t *p,
 		int type, snd_seq_event_t *ev, port_status_t *port)
 {
 	if (port_num_subscription(p, SND_SEQ_QUERY_SUBS_WRITE) == 0)
-		reset_all(port->main, use_thread);
+		reset_all(port->main, MIDI_MODE_GM, TRUE, use_thread);
 	return 0;
 }
 
@@ -1214,6 +1242,10 @@ static void parse_sysex(port_status_t *port,
 	static unsigned char gm_on_macro[] = {
 		0x7e, 0x7f, 0x09, 0x01
 	};
+	/* GM2 on */
+	static unsigned char gm2_on_macro[] = {
+		0x7e, 0x7f, 0x09, 0x03
+	};
 	/* GS prefix
 	 * master vol:   XX=0x00, YY=0x04, ZZ=0-127
 	 * reverb mode:  XX=0x01, YY=0x30, ZZ=0-7
@@ -1237,23 +1269,20 @@ static void parse_sysex(port_status_t *port,
 	buf++, len--;
 	/* GM on */
 	if (len >= sizeof(gm_on_macro)
-			&& memcmp(buf, gm_on_macro, sizeof(gm_on_macro)) == 0) {
-		if (st->midi_mode != MIDI_MODE_GS && st->midi_mode != MIDI_MODE_XG) {
-			st->midi_mode = MIDI_MODE_GM;
-			display_midi_mode(st->w_midi_mode, in_buf);
-		}
+			&& memcmp(buf, gm_on_macro, sizeof(gm_on_macro)) == 0)
+		reset_all(st, MIDI_MODE_GM, FALSE, in_buf);
+	/* GM2 on */
+	else if (len >= sizeof(gm2_on_macro)
+			&& memcmp(buf, gm2_on_macro, sizeof(gm2_on_macro)) == 0)
+		reset_all(st, MIDI_MODE_GM2, FALSE, in_buf);
 	/* GS macros */
-	} else if (len >= 8
+	else if (len >= 8
 			&& memcmp(buf, gs_pfx_macro, sizeof(gs_pfx_macro)) == 0) {
-		if (st->midi_mode != MIDI_MODE_GS && st->midi_mode != MIDI_MODE_XG) {
-			st->midi_mode = MIDI_MODE_GS;
-			display_midi_mode(st->w_midi_mode, in_buf);
-		}
 		/* GS reset */
-		if (buf[5] == 0x00 && buf[6] == 0x7f && buf[7] == 0x00) {
-			;
+		if (buf[5] == 0x00 && buf[6] == 0x7f && buf[7] == 0x00)
+			reset_all(st, MIDI_MODE_GS, FALSE, in_buf);
 		/* drum pattern */
-		} else if ((buf[5] & 0xf0) == 0x10 && buf[6] == 0x15) {
+		else if ((buf[5] & 0xf0) == 0x10 && buf[6] == 0x15) {
 			if ((p = get_channel(buf[5])) < MIDI_CHANNELS) {
 				port->ch[p].is_drum = (buf[7]) ? 1 : 0;
 				set_vel_bar_color(port->ch[p].w_vel,
@@ -1267,11 +1296,10 @@ static void parse_sysex(port_status_t *port,
 		}
 	/* XG on */
 	} else if (len >= sizeof(xg_on_macro)
-			&& memcmp(buf, xg_on_macro, sizeof(xg_on_macro)) == 0) {
-		st->midi_mode = MIDI_MODE_XG;
-		display_midi_mode(st->w_midi_mode, in_buf);
+			&& memcmp(buf, xg_on_macro, sizeof(xg_on_macro)) == 0)
+		reset_all(st, MIDI_MODE_XG, FALSE, in_buf);
 	/* MIDI Tuning Standard */
-	} else if (len >= 7 && buf[0] >= 0x7e && buf[2] == 0x08)
+	else if (len >= 7 && buf[0] >= 0x7e && buf[2] == 0x08)
 		switch (buf[3]) {
 		case 0x0a:
 			if (st->temper_keysig == TEMPER_UNKNOWN)
@@ -1325,14 +1353,18 @@ static void visualize_temper_type(midi_status_t *st, int in_buf)
 			display_temper_type(chst->w_temper_type, in_buf);
 		}
 	}
-	for (i = 0; i < 8; i++)
+	for (i = 0; i < 8; i++) {
+		if (st->tt_mute_save & 1 << i)
+			suppress_temper_type(GTK_TOGGLE_BUTTON(st->w_tt_button[i]), st);
 		av_hide_tt_button(st->w_tt_button[i], FALSE, in_buf);
+	}
 }
 
 /*
  * reset all stuff
  */
-static void reset_all(midi_status_t *st, int in_buf)
+static void reset_all(midi_status_t *st,
+		int midi_mode, int do_out, int in_buf)
 {
 	int p, i;
 	port_status_t *port;
@@ -1343,9 +1375,6 @@ static void reset_all(midi_status_t *st, int in_buf)
 			continue;
 		for (i = 0; i < MIDI_CHANNELS; i++) {
 			chst = &port->ch[i];
-			if (st->temper_type_mute)
-				av_mute_update(chst->w_chnum,
-						st->temper_type_mute & 1, in_buf);
 			all_sounds_off(chst, 0);
 			chst->is_drum = (i == 9) ? 1 : 0;
 			set_vel_bar_color(chst->w_vel, chst->is_drum, in_buf);
@@ -1356,19 +1385,24 @@ static void reset_all(midi_status_t *st, int in_buf)
 			display_temper_type(chst->w_temper_type, in_buf);
 			if (show_piano)
 				av_piano_reset(chst->w_piano, in_buf);
-			if (is_redirect(port))
+			if (do_out && is_redirect(port))
 				send_resets(chst);
 		}
-		if (is_redirect(port))
+		if (do_out && is_redirect(port))
 			port_flush_event(port->port);
 	}
-	st->midi_mode = MIDI_MODE_GM;
-	display_midi_mode(st->w_midi_mode, 0);
+	st->midi_mode = midi_mode;
+	display_midi_mode(st->w_midi_mode, in_buf);
 	st->temper_keysig = TEMPER_UNKNOWN;
-	display_temper_keysig(st->w_temper_keysig, 0);
+	display_temper_keysig(st->w_temper_keysig, in_buf);
 	st->timer_update = TRUE;
-	for (i = 0; i < 8; i++)
+	if (st->temper_type_mute)
+		st->tt_mute_save = st->temper_type_mute;
+	for (i = 0; i < 8; i++) {
 		av_hide_tt_button(st->w_tt_button[i], TRUE, in_buf);
+		if (st->temper_type_mute & 1 << i)
+			suppress_temper_type(GTK_TOGGLE_BUTTON(st->w_tt_button[i]), st);
+	}
 }
 
 /*

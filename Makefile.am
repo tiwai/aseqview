@@ -15,7 +15,7 @@ aseqview_LDADD = @ASEQVIEW_LIBS@
 
 EXTRA_DIST = \
 	$(man_MANS) \
-	bitmaps/gm.xbm bitmaps/gs.xbm bitmaps/xg.xbm \
+	bitmaps/gm.xbm bitmaps/gm2.xbm bitmaps/gs.xbm bitmaps/xg.xbm \
 	bitmaps/blank1.xbm \
 	bitmaps/Ces.xbm bitmaps/Ges.xbm bitmaps/Des.xbm bitmaps/As.xbm \
 	bitmaps/Es.xbm bitmaps/B.xbm bitmaps/F.xbm bitmaps/C.xbm \

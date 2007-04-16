@@ -1,3 +1,8 @@
+0.2.7	- Fixes and new features by TAMUKI Shoichi <tamuki@linet.gr.jp>
+	- Add GM2 display
+	- Allow multiple -d and -s options (also comma separated addresses)
+	- Fix mute status control with multiple ports
+	
 0.2.6	- Fix segfault with thread mode (silly typo)
 	- Add mute-control feature by TAMUKI Shoichi
 
