@@ -46,6 +46,7 @@
 #define MIDI_CTL_MSB_MAIN_VOLUME	SND_MCTL_MSB_MAIN_VOLUME
 #define MIDI_CTL_MSB_PAN			SND_MCTL_MSB_PAN
 #define MIDI_CTL_MSB_EXPRESSION		SND_MCTL_MSB_EXPRESSION
+#define MIDI_CTL_SUSTAIN			SND_MCTL_SUSTAIN
 #define MIDI_CTL_ALL_SOUNDS_OFF		SND_MCTL_ALL_SOUNDS_OFF
 #define MIDI_CTL_RESET_CONTROLLERS	SND_MCTL_RESET_CONTROLLERS
 #define MIDI_CTL_ALL_NOTES_OFF		SND_MCTL_ALL_NOTES_OFF
@@ -86,7 +87,7 @@ struct port_status_t {
 struct midi_status_t {
 	port_client_t *client;
 	int num_ports;
-	port_status_t *ports;
+	port_status_t *ports, *tport;
 	/* common parameter */
 	int midi_mode;
 	int temper_keysig;
@@ -139,6 +140,7 @@ enum {
 static int parse_addr(char *, int *, int *, int *);
 static void usage(void);
 static midi_status_t *midi_status_new(int);
+static void midi_status_free(midi_status_t *);
 static void create_port_window(port_status_t *);
 static int quit(GtkWidget *);
 static GtkWidget *create_viewer(port_status_t *);
@@ -163,6 +165,7 @@ static void resume_notes_on(channel_status_t *);
 static int port_subscribed(port_t *, int, snd_seq_event_t *, port_status_t *);
 static int port_unused(port_t *, int, snd_seq_event_t *, port_status_t *);
 static int process_event(port_t *, int, snd_seq_event_t *, port_status_t *);
+static void replace_event(port_t *, int, snd_seq_event_t *, port_status_t *);
 static void redirect_event(port_status_t *, snd_seq_event_t *);
 static void change_note(port_status_t *, int, int, int, int);
 static void change_program(port_status_t *, int, int, int);
@@ -188,6 +191,7 @@ static void display_temper_keysig(GtkWidget *, int);
 static void display_temper_type(GtkWidget *, int);
 static void av_hide_tt_button(GtkWidget *, int, int);
 static void av_ringbuf_init(void);
+static void av_ringbuf_free(void);
 static int av_ringbuf_read(int *, GtkWidget **, long *);
 static int av_ringbuf_write(int, GtkWidget *, long);
 static void *midi_loop(void *);
@@ -201,6 +205,7 @@ static int set_realtime_priority(int);
  */
 static int do_output = TRUE;
 static int rt_prio = FALSE;
+static int use_tuning_port = FALSE;
 static int use_thread = TRUE;
 static pthread_t midi_thread;
 static int show_piano = TRUE;
@@ -209,9 +214,10 @@ static int aseqview_cols = V_COLS;
 static struct option long_option[] = {
 	{ "nooutput", 0, NULL, 'o' },
 	{ "realtime", 0, NULL, 'r' },
+	{ "ports", 1, NULL, 'p' },
 	{ "source", 1, NULL, 's' },
 	{ "dest", 1, NULL, 'd' },
-	{ "ports", 1, NULL, 'p' },
+	{ "tuningport", 2, NULL, 'T' },
 	{ "help", 0, NULL, 'h' },
 	{ "thread", 0, NULL, 't' },
 	{ "nothread", 0, NULL, 'm' },
@@ -227,6 +233,7 @@ int main(int argc, char **argv)
 	int p, c;
 	int src_client[MAX_PORTS], src_port[MAX_PORTS];
 	int dest_client[MAX_PORTS], dest_port[MAX_PORTS];
+	int tuning_client = -1, tuning_port;
 	int num_ports = 1;
 	midi_status_t *st;
 	port_status_t *port;
@@ -234,7 +241,7 @@ int main(int argc, char **argv)
 	gtk_init(&argc, &argv);
 	for (p = 0; p < MAX_PORTS; p++)
 		src_client[p] = dest_client[p] = -1;
-	while ((c = getopt_long(argc, argv, "ors:d:p:tmP",
+	while ((c = getopt_long(argc, argv, "orp:s:d:T::tmP",
 			long_option, NULL)) != -1) {
 		switch (c) {
 		case 'o':
@@ -242,6 +249,9 @@ int main(int argc, char **argv)
 			break;
 		case 'r':
 			rt_prio = TRUE;
+			break;
+		case 'p':
+			num_ports = atoi(optarg);
 			break;
 		case 's':
 			if (parse_addr(optarg, src_client, src_port, &num_ports) < 0) {
@@ -255,8 +265,12 @@ int main(int argc, char **argv)
 				return 1;
 			}
 			break;
-		case 'p':
-			num_ports = atoi(optarg);
+		case 'T':
+			use_tuning_port = TRUE;
+			if (parse_addr(optarg, &tuning_client, &tuning_port, NULL) < 0) {
+				fprintf(stderr, "invalid argument %s for -T\n", optarg);
+				return 1;
+			}
 			break;
 		case 't':
 			use_thread = TRUE;
@@ -289,6 +303,16 @@ int main(int argc, char **argv)
 		port_add_callback(port->port, PORT_MIDI_EVENT_CB,
 				(port_callback_t) process_event, port);
 	}
+	/* use tuning-control port */
+	if (use_tuning_port) {
+		port = st->tport;
+		port_add_callback(port->port, PORT_SUBSCRIBE_CB,
+				(port_callback_t) port_subscribed, port);
+		port_add_callback(port->port, PORT_UNUSE_CB,
+				(port_callback_t) port_unused, port);
+		port_add_callback(port->port, PORT_MIDI_EVENT_CB,
+				(port_callback_t) process_event, port);
+	}
 	if (use_thread)
 		av_ringbuf_init();
 	/* explicit subscription to ports */
@@ -303,6 +327,10 @@ int main(int argc, char **argv)
 			if (p == 0)
 				reset_all(st, MIDI_MODE_GM, TRUE, FALSE);
 		}
+	/* use tuning-control port */
+	if (use_tuning_port && tuning_client >= 0
+			&& tuning_client != SND_SEQ_ADDRESS_SUBSCRIBERS)
+		port_connect_from(st->tport->port, tuning_client, tuning_port);
 	if (use_thread) {
 		pthread_create(&midi_thread, NULL, midi_loop, st);
 		gtk_idle_add(idle_cb, st);
@@ -316,6 +344,9 @@ int main(int argc, char **argv)
 		port_client_stop(st->client);
 		pthread_join(midi_thread, NULL);
 	}
+	midi_status_free(st);
+	if (use_thread)
+		av_ringbuf_free();
 	return 0;
 }
 
@@ -327,29 +358,43 @@ static int parse_addr(char *arg, int *clientp, int *portp, int *num_ports)
 	int p;
 	char *q;
 	
-	for (p = 0; clientp[p] >= 0; p++)
-		if (p == MAX_PORTS - 1)
-			return -1;
-	p--, arg--;
-	do {
-		p++;
-		if (p == MAX_PORTS)
-			return -1;
-		arg++;
+	if (num_ports) {
+		for (p = 0; clientp[p] >= 0; p++)
+			if (p == MAX_PORTS - 1)
+				return -1;
+		p--, arg--;
+		do {
+			p++;
+			if (p == MAX_PORTS)
+				return -1;
+			arg++;
+			if (isdigit(*arg)) {
+				if (!(q = strpbrk(arg, ":.")))
+					return -1;
+				clientp[p] = atoi(arg);
+				portp[p] = atoi(q + 1);
+			} else {
+				if (*arg != 's' && *arg != 'S')
+					return -1;
+				clientp[p] = SND_SEQ_ADDRESS_SUBSCRIBERS;
+				portp[p] = 0;
+			}
+		} while ((arg = strchr(arg, ',')));
+		if (*num_ports < p + 1)
+			*num_ports = p + 1;
+	} else if (arg) {
 		if (isdigit(*arg)) {
 			if (!(q = strpbrk(arg, ":.")))
 				return -1;
-			clientp[p] = atoi(arg);
-			portp[p] = atoi(q + 1);
+			*clientp = atoi(arg);
+			*portp = atoi(q + 1);
 		} else {
 			if (*arg != 's' && *arg != 'S')
 				return -1;
-			clientp[p] = SND_SEQ_ADDRESS_SUBSCRIBERS;
-			portp[p] = 0;
+			*clientp = SND_SEQ_ADDRESS_SUBSCRIBERS;
+			*portp = 0;
 		}
-	} while ((arg = strchr(arg, ',')));
-	if (*num_ports < p + 1)
-		*num_ports = p + 1;
+	}
 	return 0;
 }
 
@@ -360,7 +405,7 @@ static void usage(void)
 {
 	printf("%s - ALSA sequencer event viewer / filter\n", PACKAGE);
 	printf("  ver.%s\n", VERSION);
-	printf("  Copyright (c) 1999-2005 by Takashi Iwai <tiwai@suse.de>\n");
+	printf("  Copyright (c) 1999-2007 by Takashi Iwai <tiwai@suse.de>\n");
 	printf("\n");
 	printf("usage: %s [-options]\n", PACKAGE);
 	printf("   -o,--nooutput     suppress output (read-only mode)\n");
@@ -368,6 +413,7 @@ static void usage(void)
 	printf("   -p,--ports #      number of ports to be opened\n");
 	printf("   -s,--source addr  input from specified addr (client:port)\n");
 	printf("   -d,--dest addr    output to specified addr (client:port)\n");
+	printf("   -T,--tuningport   use tuning-control port\n");
 	printf("   -t,--thread       use multi-threads (default)\n");
 	printf("   -m,--nothread     don't use multi-threads\n");
 	printf("   -P,--nopiano      don't show piano\n");
@@ -417,7 +463,28 @@ static midi_status_t *midi_status_new(int num_ports)
 			chst->ctrl[MIDI_CTL_MSB_EXPRESSION] = 127;
 		}
 	}
+	/* use tuning-control port */
+	if (use_tuning_port) {
+		caps = SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE;
+		st->tport = g_malloc0(sizeof(port_status_t));
+		port = st->tport;
+		port->main = st;
+		port->index = -1;
+		port->port = port_attach(st->client, "Tuning-control Port", caps,
+				SND_SEQ_PORT_TYPE_MIDI_GENERIC);
+		memset(port->ch, 0, sizeof(port->ch));
+	}
 	return st;
+}
+
+/*
+ */
+static void midi_status_free(midi_status_t *st)
+{
+	g_free(st->ports);
+	if (use_tuning_port)
+		g_free(st->tport);
+	g_free(st);
 }
 
 /*
@@ -806,7 +873,10 @@ static int expose_temper_type(GtkWidget *w)
 	int x_ofs = (width - tt_width) / 2;
 	int y_ofs = (height - tt_height - 6) / 2;
 	
-	i = (tk == TEMPER_UNKNOWN) ? 0 : tt - ((tt >= 0x40) ? 0x3c : 0) + 1;
+	if (tt >= 0 && tt < 4 || tt >= 64 && tt < 68)
+		i = (tk == TEMPER_UNKNOWN) ? 0 : tt - ((tt >= 0x40) ? 0x3c : 0) + 1;
+	else
+		i = 0;
 	p = st->w_tt_xpm[i];
 	gdk_draw_pixmap(w->window, w->style->fg_gc[GTK_STATE_NORMAL], p, 0, 0,
 			x_ofs, y_ofs, tt_width, tt_height);
@@ -848,7 +918,7 @@ static int update_time(GtkWidget *w)
  */
 static void suppress_temper_type(GtkToggleButton *w, midi_status_t *st)
 {
-	int i, p;
+	int i, p, tt;
 	port_status_t *port;
 	channel_status_t *chst;
 	
@@ -859,10 +929,10 @@ static void suppress_temper_type(GtkToggleButton *w, midi_status_t *st)
 		if ((port = &st->ports[p])->index < 0)
 			continue;
 		for (i = 0; i < MIDI_CHANNELS; i++) {
-			chst = &port->ch[i];
-			av_mute_update(chst->w_chnum,
-					st->temper_type_mute & 1 << chst->temper_type
-					- ((chst->temper_type >= 0x40) ? 0x3c : 0), use_thread);
+			chst = &port->ch[i], tt = chst->temper_type;
+			if (tt >= 0 && tt < 4 || tt >= 64 && tt < 68)
+				av_mute_update(chst->w_chnum, st->temper_type_mute
+						& 1 << tt - ((tt >= 0x40) ? 0x3c : 0), use_thread);
 		}
 	}
 }
@@ -1022,10 +1092,14 @@ static int port_unused(port_t *p,
 static int process_event(port_t *p,
 		int type, snd_seq_event_t *ev, port_status_t *port)
 {
+	if (port->index == -1) {
+		replace_event(p, type, ev, port);
+		return 0;
+	}
 	if (port->index < 0)
 		return 0;
-	port->main->queue = ev->queue;
 	port->main->timer_update = TRUE;
+	port->main->queue = ev->queue;
 	if (is_redirect(port))
 		redirect_event(port, ev);
 	switch (ev->type) {
@@ -1056,6 +1130,82 @@ static int process_event(port_t *p,
 		break;
 	}
 	return 0;
+}
+
+/*
+ */
+static void replace_event(port_t *pp,
+		int type, snd_seq_event_t *ev, port_status_t *tport)
+{
+	static unsigned char tk_macro[] = {
+		0xf0, 0x7f, 0x10, 0x08, 0x0a, 0x40, 0x00, 0xf7
+	};
+	static unsigned char tt_macro[] = {
+		0xf0, 0x7f, 0x10, 0x08, 0x0b, 0x03, 0x7b, 0x7f, 0x00, 0xf7
+	};
+	static unsigned char key2sf[] = {
+		0x40, 0x3b, 0x42, 0x3d, 0x44, 0x3f,
+		0x46, 0x41, 0x3c, 0x43, 0x3e, 0x45
+	};
+	static int mi = FALSE;
+	midi_status_t *st = tport->main;
+	port_status_t *port;
+	int tk = st->temper_keysig, adj, p, i, ttch;
+	
+	if (snd_seq_ev_is_note_type(ev)) {
+		if (ev->type == SND_SEQ_EVENT_NOTEON && ev->data.note.velocity == 0)
+			ev->type = SND_SEQ_EVENT_NOTEOFF;
+		tk_macro[5] = key2sf[(ev->data.note.note + ((mi) ? 3 : 0)) % 12];
+		if (ev->type == SND_SEQ_EVENT_NOTEON) {
+			adj = (tk_macro[5] == (tk + 8) % 16 + 56);
+			tk_macro[6] = (mi) ? ((adj) ? 2 : 1) : ((adj) ? 3 : 0);
+			snd_seq_ev_clear(ev);
+			snd_seq_ev_set_sysex(ev, sizeof(tk_macro), tk_macro);
+			ev->queue = st->queue;
+			process_event(pp, type, ev, &st->ports[0]);
+		} else if (tk + 8 & 0x20) {
+			tk_macro[6] = (mi) ? 1 : 0;
+			snd_seq_ev_clear(ev);
+			snd_seq_ev_set_sysex(ev, sizeof(tk_macro), tk_macro);
+			ev->queue = st->queue;
+			process_event(pp, type, ev, &st->ports[0]);
+		}
+	} else if (ev->type == SND_SEQ_EVENT_PGMCHANGE) {
+		tt_macro[8] = ev->data.control.value;
+		snd_seq_ev_clear(ev);
+		for (p = 0; p < st->num_ports; p++) {
+			port = &st->ports[p];
+			for (i = 0, ttch = 0; i < MIDI_CHANNELS; i++)
+				if (!port->ch[i].is_drum)
+					ttch |= 1 << i;
+			tt_macro[5] = ttch >> 14;
+			tt_macro[6] = ttch >> 7 & 0x7f;
+			tt_macro[7] = ttch & 0x7f;
+			snd_seq_ev_set_sysex(ev, sizeof(tt_macro), tt_macro);
+			ev->queue = st->queue;
+			process_event(pp, type, ev, port);
+		}
+		if (tk == TEMPER_UNKNOWN && mi) {
+			tk_macro[5] = key2sf[0], tk_macro[6] = 1;
+			snd_seq_ev_clear(ev);
+			snd_seq_ev_set_sysex(ev, sizeof(tk_macro), tk_macro);
+			ev->queue = st->queue;
+			process_event(pp, type, ev, &st->ports[0]);
+		}
+	} else if (ev->type == SND_SEQ_EVENT_CONTROLLER
+			&& ev->data.control.param == MIDI_CTL_SUSTAIN
+			&& mi != (ev->data.control.value >= 64)) {
+		mi = (ev->data.control.value >= 64);
+		if (tk != TEMPER_UNKNOWN) {
+			adj = tk + 8 & 0x20;
+			tk_macro[5] = (tk + 8) % 16 + 56;
+			tk_macro[6] = (mi) ? ((adj) ? 2 : 1) : ((adj) ? 3 : 0);
+			snd_seq_ev_clear(ev);
+			snd_seq_ev_set_sysex(ev, sizeof(tk_macro), tk_macro);
+			ev->queue = st->queue;
+			process_event(pp, type, ev, &st->ports[0]);
+		}
+	}
 }
 
 /*
@@ -1260,7 +1410,7 @@ static void parse_sysex(port_status_t *port,
 		0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00
 	};
 	midi_status_t *st = port->main;
-	int p, need_visualize = FALSE, tt, i;
+	int p, need_visualize = FALSE, ttch, i, tt;
 	channel_status_t *chst;
 	
 	if (len <= 0 || buf[0] != 0xf0)
@@ -1310,18 +1460,24 @@ static void parse_sysex(port_status_t *port,
 				visualize_temper_type(st, in_buf);
 			break;
 		case 0x0b:
-			tt = (buf[4] & 0x03) << 14 | buf[5] << 7 | buf[6];
+			if (st->temper_keysig == TEMPER_UNKNOWN) {
+				st->temper_keysig = 0;
+				display_temper_keysig(st->w_temper_keysig, in_buf);
+				visualize_temper_type(st, in_buf);
+			}
+			ttch = (buf[4] & 0x03) << 14 | buf[5] << 7 | buf[6];
 			port = &st->ports[port->index | buf[4] >> 2];
 			if (port->index >= 0 && port->index < st->num_ports)
 				for (i = 0; i < MIDI_CHANNELS; i++)
-					if (tt & 1 << i) {
+					if (ttch & 1 << i) {
 						chst = &port->ch[i];
-						chst->temper_type = buf[7];
+						tt = chst->temper_type = buf[7];
 						display_temper_type(chst->w_temper_type, in_buf);
-						if (st->temper_type_mute)
+						if (st->temper_type_mute
+								&& (tt >= 0 && tt < 4 || tt >= 64 && tt < 68))
 							av_mute_update(chst->w_chnum,
-									st->temper_type_mute & 1 << buf[7]
-									- ((buf[7] >= 0x40) ? 0x3c : 0), in_buf);
+									st->temper_type_mute & 1 << tt
+									- ((tt >= 0x40) ? 0x3c : 0), in_buf);
 					}
 			break;
 		}
@@ -1566,14 +1722,16 @@ static int ringbuf_rdptr, ringbuf_wrptr;
  */
 static void av_ringbuf_init(void)
 {
-	ringbuf = (struct av_ringbuf *) malloc(sizeof(struct av_ringbuf)
+	ringbuf = (struct av_ringbuf *) g_malloc0(sizeof(struct av_ringbuf)
 			* RINGBUF_SIZE);
-	if (!ringbuf) {
-		fprintf(stderr, "cannot allocate ringbuffer\n");
-		exit(1);
-	}
-	memset(ringbuf, 0, sizeof(struct av_ringbuf) * RINGBUF_SIZE);
 	ringbuf_rdptr = ringbuf_wrptr = 0;
+}
+
+/*
+ */
+static void av_ringbuf_free(void)
+{
+	g_free(ringbuf);
 }
 
 /*
