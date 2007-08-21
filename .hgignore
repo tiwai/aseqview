@@ -1,3 +1,5 @@
+syntax: glob
+
 .deps
 config.h
 config.h.in
@@ -16,3 +18,5 @@ install-sh
 missing
 mkinstalldirs
 depcomp
+etc/aseqview.spec
+
