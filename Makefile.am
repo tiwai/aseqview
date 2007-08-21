@@ -32,3 +32,4 @@ EXTRA_DIST = \
 
 CONFIG_CLEAN_FILES = etc/aseqview.spec
 
+AUTOMAKE_OPTIONS = foreign
