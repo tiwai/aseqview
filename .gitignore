@@ -1,5 +1,3 @@
-syntax: glob
-
 .deps
 config.h
 config.h.in
