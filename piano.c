@@ -69,10 +69,10 @@ static GdkColor c60clr = { red : 18000, green : 0, blue : 54000 };
 
 static GtkWidgetClass *parent_class = NULL;
 
-guint
+GType
 piano_get_type (void)
 {
-  static guint piano_type = 0;
+  static GType piano_type = 0;
 
   if (!piano_type)
     {

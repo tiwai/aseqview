@@ -71,7 +71,7 @@ struct _PianoClass
 };
 
 GtkWidget *piano_new (gboolean * selkeys);
-guint piano_get_type (void);
+GType piano_get_type (void);
 void piano_note_on (Piano * piano, guint8 keynum);
 void piano_note_off (Piano * piano, guint8 keynum);
 
