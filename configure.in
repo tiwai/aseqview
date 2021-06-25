@@ -12,9 +12,9 @@ AC_C_INLINE
 
 AH_TEMPLATE([HAVE_LIBCAP], [Hey, we have libcap])
 AC_CHECK_HEADER(sys/capability.h,
-		AC_CHECK_LIB(cap, cap_get_proc,
+		[AC_CHECK_LIB(cap, cap_get_proc,
 			     [AC_DEFINE(HAVE_LIBCAP)
-			      LIBS="$LIBS -lcap"]))
+			      LIBS="$LIBS -lcap"])])
 
 AM_PATH_ALSA(0.5.0)
 AC_CHECK_HEADERS(alsa/asoundlib.h)
