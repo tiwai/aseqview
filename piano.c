@@ -36,10 +36,6 @@ static void piano_size_request (GtkWidget * widget,
 static void piano_size_allocate (GtkWidget * widget,
   GtkAllocation * allocation);
 static gint piano_expose (GtkWidget * widget, GdkEventExpose * event);
-static gint piano_button_press (GtkWidget * widget, GdkEventButton * event);
-static gint piano_button_release (GtkWidget * widget, GdkEventButton * event);
-static gint piano_motion_notify (GtkWidget * widget, GdkEventMotion * event);
-static void piano_update_mouse (Piano * piano, gint x, gint y);
 
 #define POFSY 0
 
@@ -458,14 +454,11 @@ piano_size_request (GtkWidget * widget, GtkRequisition * requisition)
 static void
 piano_size_allocate (GtkWidget * widget, GtkAllocation * allocation)
 {
-  Piano *piano;
-
   g_return_if_fail (widget != NULL);
   g_return_if_fail (IS_PIANO (widget));
   g_return_if_fail (allocation != NULL);
 
   widget->allocation = *allocation;
-  piano = PIANO (widget);
 
   if (GTK_WIDGET_REALIZED (widget))
     {

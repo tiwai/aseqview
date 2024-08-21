@@ -853,7 +853,7 @@ static int expose_temper_keysig(GtkWidget *w)
 	int y_ofs = (height - tk_height) / 2;
 	
 	i = (tk == TEMPER_UNKNOWN) ? 0 : (tk + 8) % 32;
-	adj = (tk == TEMPER_UNKNOWN) ? 0 : tk + 8 & 0x20;
+	adj = (tk == TEMPER_UNKNOWN) ? 0 : (tk + 8) & 0x20;
 	p = (adj) ? st->w_tk_xpm_adj[i] : st->w_tk_xpm[i];
 	gdk_draw_pixmap(w->window, w->style->fg_gc[GTK_STATE_NORMAL], p, 0, 0,
 			x_ofs, y_ofs, tk_width, tk_height);
@@ -873,7 +873,7 @@ static int expose_temper_type(GtkWidget *w)
 	int x_ofs = (width - tt_width) / 2;
 	int y_ofs = (height - tt_height - 6) / 2;
 	
-	if (tt >= 0 && tt < 4 || tt >= 64 && tt < 68)
+	if ((tt >= 0 && tt < 4) || (tt >= 64 && tt < 68))
 		i = (tk == TEMPER_UNKNOWN) ? 0 : tt - ((tt >= 0x40) ? 0x3c : 0) + 1;
 	else
 		i = 0;
@@ -930,9 +930,9 @@ static void suppress_temper_type(GtkToggleButton *w, midi_status_t *st)
 			continue;
 		for (i = 0; i < MIDI_CHANNELS; i++) {
 			chst = &port->ch[i], tt = chst->temper_type;
-			if (tt >= 0 && tt < 4 || tt >= 64 && tt < 68)
+			if ((tt >= 0 && tt < 4) || (tt >= 64 && tt < 68))
 				av_mute_update(chst->w_chnum, st->temper_type_mute
-						& 1 << tt - ((tt >= 0x40) ? 0x3c : 0), use_thread);
+					       & (1 << (tt - (tt >= 0x40) ? 0x3c : 0)), use_thread);
 		}
 	}
 }
@@ -1163,7 +1163,7 @@ static void replace_event(port_t *pp,
 			snd_seq_ev_set_sysex(ev, sizeof(tk_macro), tk_macro);
 			ev->queue = st->queue;
 			process_event(pp, type, ev, &st->ports[0]);
-		} else if (tk + 8 & 0x20) {
+		} else if ((tk + 8) & 0x20) {
 			tk_macro[6] = (mi) ? 1 : 0;
 			snd_seq_ev_clear(ev);
 			snd_seq_ev_set_sysex(ev, sizeof(tk_macro), tk_macro);
@@ -1197,7 +1197,7 @@ static void replace_event(port_t *pp,
 			&& mi != (ev->data.control.value >= 64)) {
 		mi = (ev->data.control.value >= 64);
 		if (tk != TEMPER_UNKNOWN) {
-			adj = tk + 8 & 0x20;
+			adj = (tk + 8) & 0x20;
 			tk_macro[5] = (tk + 8) % 16 + 56;
 			tk_macro[6] = (mi) ? ((adj) ? 2 : 1) : ((adj) ? 3 : 0);
 			snd_seq_ev_clear(ev);
@@ -1474,10 +1474,10 @@ static void parse_sysex(port_status_t *port,
 						tt = chst->temper_type = buf[7];
 						display_temper_type(chst->w_temper_type, in_buf);
 						if (st->temper_type_mute
-								&& (tt >= 0 && tt < 4 || tt >= 64 && tt < 68))
+								&& ((tt >= 0 && tt < 4) || (tt >= 64 && tt < 68)))
 							av_mute_update(chst->w_chnum,
-									st->temper_type_mute & 1 << tt
-									- ((tt >= 0x40) ? 0x3c : 0), in_buf);
+								       st->temper_type_mute &
+								       (1 << (tt - ((tt >= 0x40) ? 0x3c : 0))), in_buf);
 					}
 			break;
 		}
