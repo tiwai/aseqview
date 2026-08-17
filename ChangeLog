@@ -1,3 +1,5 @@
+0.3.0	- Migrate from Gtk-2 to Gtk-3; Gtk-1 and 2 supports are dropped
+
 0.2.9	- Fix crash at piano widget creation
 	- Fix gcc14 build errors and warnings
 	- Minor git management fixes
