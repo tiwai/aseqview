@@ -30,6 +30,4 @@ void channel_status_bar_update(GtkWidget *w, int val);
 void channel_status_bar_set_color_rgb(GtkWidget *w, int r, int g, int b);
 void level_bar_set_level_color_rgb(GtkWidget *w, int r, int g, int b);
 
-void alloc_color(GdkColor *color, int red, int green, int blue);
-
 #endif

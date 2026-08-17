@@ -29,13 +29,14 @@
 
 static void piano_class_init (PianoClass * klass);
 static void piano_init (Piano * piano);
-static void piano_destroy (GtkObject * object);
+static void piano_destroy (GObject * object);
 static void piano_realize (GtkWidget * widget);
-static void piano_size_request (GtkWidget * widget,
-  GtkRequisition * requisition);
-static void piano_size_allocate (GtkWidget * widget,
-  GtkAllocation * allocation);
-static gint piano_expose (GtkWidget * widget, GdkEventExpose * event);
+static void piano_get_preferred_width (GtkWidget * widget, gint * min, gint * nat);
+static void piano_get_preferred_height (GtkWidget * widget, gint * min, gint * nat);
+static void piano_size_allocate (GtkWidget * widget, GtkAllocation * allocation);
+static gboolean piano_draw (GtkWidget * widget, cairo_t * cr);
+static void draw_keyboard_surface (Piano * piano);
+static void draw_key_on_surface (Piano * piano, int note, gboolean pressed);
 
 #define POFSY 0
 
@@ -60,92 +61,55 @@ keyinfo[12] = { {PIANO_KEY_XWID-(PIANO_KEY_XWID/3),     2,                    TR
 				{PIANO_KEY_XWID*7-1,                    PIANO_KEY_XWID*6+2,   TRUE}
 };
 
-/* color used for note C60 marker */
-static GdkColor c60clr = { red : 18000, green : 0, blue : 54000 };
-
-static GtkWidgetClass *parent_class = NULL;
-
-GType
-piano_get_type (void)
-{
-  static GType piano_type = 0;
-
-  if (!piano_type)
-    {
-      GtkTypeInfo piano_info = {
-	"Piano",
-	sizeof (Piano),
-	sizeof (PianoClass),
-	(GtkClassInitFunc) piano_class_init,
-	(GtkObjectInitFunc) piano_init,
-	NULL,
-	NULL,
-      };
-      piano_type = gtk_type_unique (gtk_widget_get_type (), &piano_info);
-    }
-
-  return piano_type;
-}
-
 enum
 {
   NOTE_ON,
   NOTE_OFF,
-  DUMMY_SIGNAL			/* used to count signals */
+  LAST_SIGNAL
 };
 
-static guint piano_signals[DUMMY_SIGNAL] = { 0 };
+static guint piano_signals[LAST_SIGNAL] = { 0 };
 
-#ifndef GTK_CLASS_TYPE
-#define GTK_CLASS_TYPE(x)	((x)->type)
-#endif
+G_DEFINE_TYPE(Piano, piano, GTK_TYPE_WIDGET)
 
 static void
 piano_class_init (PianoClass * klass)
 {
-  GtkObjectClass *object_class;
-  GtkWidgetClass *widget_class;
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
+  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
 
-  object_class = (GtkObjectClass *) klass;
-  widget_class = (GtkWidgetClass *) klass;
+  object_class->finalize = piano_destroy;
 
-  parent_class = gtk_type_class (gtk_widget_get_type ());
+  widget_class->realize = piano_realize;
+  widget_class->draw = piano_draw;
+  widget_class->get_preferred_width = piano_get_preferred_width;
+  widget_class->get_preferred_height = piano_get_preferred_height;
+  widget_class->size_allocate = piano_size_allocate;
 
-  piano_signals[NOTE_ON] = gtk_signal_new ("note-on",
-    GTK_RUN_FIRST, GTK_CLASS_TYPE(object_class),
-    GTK_SIGNAL_OFFSET (PianoClass, note_on),
-    gtk_marshal_NONE__UINT, GTK_TYPE_NONE, 1, GTK_TYPE_UINT);
-
-  piano_signals[NOTE_OFF] = gtk_signal_new ("note-off",
-    GTK_RUN_FIRST, GTK_CLASS_TYPE(object_class),
-    GTK_SIGNAL_OFFSET (PianoClass, note_off),
-    gtk_marshal_NONE__UINT, GTK_TYPE_NONE, 1, GTK_TYPE_UINT);
-
-#if GTK_MAJOR_VERSION < 2
-  gtk_object_class_add_signals (object_class, piano_signals, DUMMY_SIGNAL);
-#endif
   klass->note_on = NULL;
   klass->note_off = NULL;
 
-  object_class->destroy = piano_destroy;
+  piano_signals[NOTE_ON] = g_signal_new ("note-on",
+    G_TYPE_FROM_CLASS (klass),
+    G_SIGNAL_RUN_FIRST,
+    G_STRUCT_OFFSET (PianoClass, note_on),
+    NULL, NULL,
+    g_cclosure_marshal_VOID__UINT,
+    G_TYPE_NONE, 1, G_TYPE_UINT);
 
-  widget_class->realize = piano_realize;
-  widget_class->expose_event = piano_expose;
-  widget_class->size_request = piano_size_request;
-  widget_class->size_allocate = piano_size_allocate;
-  widget_class->button_press_event = NULL; //piano_button_press;
-  widget_class->button_release_event = NULL; //piano_button_release;
-  widget_class->motion_notify_event = NULL; //piano_motion_notify;
+  piano_signals[NOTE_OFF] = g_signal_new ("note-off",
+    G_TYPE_FROM_CLASS (klass),
+    G_SIGNAL_RUN_FIRST,
+    G_STRUCT_OFFSET (PianoClass, note_off),
+    NULL, NULL,
+    g_cclosure_marshal_VOID__UINT,
+    G_TYPE_NONE, 1, G_TYPE_UINT);
 }
 
-/* -----------------------------------------------
- initialize piano widget
- Draws piano pixmap and black/white (un)selected state pixmaps
- Sets variables to default states
------------------------------------------------ */
 static void
 piano_init (Piano * piano)
 {
+  gtk_widget_set_has_window (GTK_WIDGET (piano), TRUE);
 }
 
 GtkWidget *
@@ -153,11 +117,10 @@ piano_new (gboolean * selkeys)
 {
   Piano *piano;
 
-  piano = gtk_type_new (piano_get_type ());
+  piano = g_object_new (piano_get_type (), NULL);
 
-  if (selkeys==NULL) {
-	  selkeys = (gboolean*)malloc(sizeof(gboolean)*128);
-  }
+  if (selkeys == NULL)
+    selkeys = g_malloc0 (sizeof (gboolean) * 128);
   piano->selkeys = selkeys;
 
   return GTK_WIDGET (piano);
@@ -168,44 +131,33 @@ void
 piano_note_on (Piano * piano, guint8 keynum)
 {
   gint xval, mod;
-  GdkRectangle uparea;		/* update area rectangle */
 
-  if (!piano)
-	  return;
   g_return_if_fail (piano != NULL);
   g_return_if_fail (IS_PIANO (piano));
   g_return_if_fail (keynum < 128);
 
   if (piano->selkeys[keynum])
-    return;			/* already selected? */
+    return;			/* already selected */
 
-  /* run user piano key press handler */
-  gtk_signal_emit (GTK_OBJECT (piano), piano_signals[NOTE_ON], keynum);
+  g_signal_emit (G_OBJECT (piano), piano_signals[NOTE_ON], 0, keynum);
 
   piano->selkeys[keynum] = TRUE;
 
+  if (!piano->keyb_surface)
+    return;
+
+  draw_key_on_surface (piano, keynum, TRUE);
+
   mod = keynum % 12;
-  xval = keynum / 12 * (PIANO_KEY_XWID*7) + keyinfo[mod].dispx;
+  xval = keynum / 12 * (PIANO_KEY_XWID * 7) + keyinfo[mod].dispx;
   if (keyinfo[mod].white)
-    {
-      gdk_draw_pixmap (piano->keyb_pm,
-	piano->widget.style->fg_gc[GTK_WIDGET_STATE (&piano->widget)],
-	piano->selw_pm, 0, 0, xval - 1, PIANO_DEFAULT_SIZEY-8 + POFSY, PIANO_KEY_XWID-1, 8);
-      uparea.x = xval - 1;
-      uparea.y = PIANO_DEFAULT_SIZEY-8 + POFSY;
-      uparea.width = PIANO_KEY_XWID-1;
-    }
+    gtk_widget_queue_draw_area (GTK_WIDGET (piano),
+      xval - 1, PIANO_DEFAULT_SIZEY - 8 + POFSY,
+      PIANO_KEY_XWID - 1, 8);
   else
-    {
-      gdk_draw_pixmap (piano->keyb_pm,
-	piano->widget.style->fg_gc[GTK_WIDGET_STATE (&piano->widget)],
-	piano->selb_pm, 0, 0, xval, PIANO_DEFAULT_SIZEY/5 + POFSY, PIANO_KEY_XWID/2+1, 8);
-      uparea.x = xval;
-      uparea.y = PIANO_DEFAULT_SIZEY/5 + POFSY;
-      uparea.width = PIANO_KEY_XWID/2+1;
-    }
-  uparea.height = 8;
-  gtk_widget_draw (&piano->widget, &uparea);
+    gtk_widget_queue_draw_area (GTK_WIDGET (piano),
+      xval, PIANO_DEFAULT_SIZEY / 5 + POFSY,
+      PIANO_KEY_XWID / 2 + 1, 8);
 }
 
 /* draws specified key in its "released" state */
@@ -213,42 +165,33 @@ void
 piano_note_off (Piano * piano, guint8 keynum)
 {
   gint xval, mod;
-  GdkRectangle uparea;		/* update area */
 
   g_return_if_fail (piano != NULL);
   g_return_if_fail (IS_PIANO (piano));
   g_return_if_fail (keynum < 128);
 
   if (!piano->selkeys[keynum])
-    return;			/* already unselected? */
+    return;			/* already unselected */
 
-  /* signal user piano release key handlers */
-  gtk_signal_emit (GTK_OBJECT (piano), piano_signals[NOTE_OFF], keynum);
+  g_signal_emit (G_OBJECT (piano), piano_signals[NOTE_OFF], 0, keynum);
 
   piano->selkeys[keynum] = FALSE;
+
+  if (!piano->keyb_surface)
+    return;
+
+  draw_key_on_surface (piano, keynum, FALSE);
 
   mod = keynum % 12;
   xval = keynum / 12 * 7 * PIANO_KEY_XWID + keyinfo[mod].dispx;
   if (keyinfo[mod].white)
-    {
-      gdk_draw_pixmap (piano->keyb_pm,
-	piano->widget.style->fg_gc[GTK_WIDGET_STATE (&piano->widget)],
-	piano->unsw_pm, 0, 0, xval - 1, PIANO_DEFAULT_SIZEY-8 + POFSY, PIANO_KEY_XWID-1, 8);
-      uparea.x = xval - 1;
-      uparea.y = PIANO_DEFAULT_SIZEY-8 + POFSY;
-      uparea.width = PIANO_KEY_XWID-1;
-    }
+    gtk_widget_queue_draw_area (GTK_WIDGET (piano),
+      xval - 1, PIANO_DEFAULT_SIZEY - 8 + POFSY,
+      PIANO_KEY_XWID - 1, 8);
   else
-    {
-      gdk_draw_pixmap (piano->keyb_pm,
-	piano->widget.style->fg_gc[GTK_WIDGET_STATE (&piano->widget)],
-	piano->unsb_pm, 0, 0, xval, PIANO_DEFAULT_SIZEY/5 + POFSY, PIANO_KEY_XWID/2+1, 8);
-      uparea.x = xval;
-      uparea.y = PIANO_DEFAULT_SIZEY/5 + POFSY;
-      uparea.width = PIANO_KEY_XWID/2+1;
-    }
-  uparea.height = 8;
-  gtk_widget_draw (&piano->widget, &uparea);
+    gtk_widget_queue_draw_area (GTK_WIDGET (piano),
+      xval, PIANO_DEFAULT_SIZEY / 5 + POFSY,
+      PIANO_KEY_XWID / 2 + 1, 8);
 }
 
 /* converts a key number to x position in pixels to center of key */
@@ -261,7 +204,7 @@ piano_key_to_xpos (guint8 keynum)
     keynum = 127;
 
   mod = keynum % 12;
-  xval = keynum / 12 * (PIANO_KEY_XWID*7);// + keyinfo[mod].dispx;
+  xval = keynum / 12 * (PIANO_KEY_XWID * 7);
 
   if (keyinfo[mod].white)
     xval += 2;
@@ -284,11 +227,11 @@ piano_xpos_to_key (gint xpos)
   gint xval, i;
   guint8 keynum;
 
-  xval = xpos % (PIANO_KEY_XWID*7);		/* pixel offset into keyboard octave */
-  for (i = 0; i < 12; i++)	/* loop through key selection offsets */
+  xval = xpos % (PIANO_KEY_XWID * 7);	/* pixel offset into keyboard octave */
+  for (i = 0; i < 12; i++)		/* loop through key selection offsets */
     if (xval <= keyinfo[i].selx)
       break;			/* is offset within key select */
-  keynum = xpos / (PIANO_KEY_XWID*7) * 12 + i;	/* calc key number */
+  keynum = xpos / (PIANO_KEY_XWID * 7) * 12 + i;	/* calc key number */
 
   if (keynum > 127)
     keynum = 127;
@@ -297,7 +240,7 @@ piano_xpos_to_key (gint xpos)
 }
 
 static void
-piano_destroy (GtkObject * object)
+piano_destroy (GObject * object)
 {
   Piano *piano;
 
@@ -306,18 +249,15 @@ piano_destroy (GtkObject * object)
 
   piano = PIANO (object);
 
-  gdk_pixmap_unref (piano->keyb_pm);
-  gdk_pixmap_unref (piano->selw_pm);
-  gdk_pixmap_unref (piano->unsw_pm);
-  gdk_pixmap_unref (piano->selb_pm);
-  gdk_pixmap_unref (piano->unsb_pm);
-  gdk_gc_unref (piano->shadowgc);
-  gdk_gc_unref (piano->c60gc);
-  gdk_color_free (&piano->shadclr);
-  gdk_color_free (&piano->c60clr);
+  if (piano->keyb_surface)
+    {
+      cairo_surface_destroy (piano->keyb_surface);
+      piano->keyb_surface = NULL;
+    }
+  g_free (piano->selkeys);
+  piano->selkeys = NULL;
 
-  if (GTK_OBJECT_CLASS (parent_class)->destroy)
-    (*GTK_OBJECT_CLASS (parent_class)->destroy) (object);
+  G_OBJECT_CLASS (piano_parent_class)->finalize (object);
 }
 
 static void
@@ -325,21 +265,20 @@ piano_realize (GtkWidget * widget)
 {
   Piano *piano;
   GdkWindowAttr attributes;
-  gint attributes_mask;
-  gint i, x, mod;
-  GdkPixmap *pixmap;
-  GdkColormap *cmap;
+  GtkAllocation allocation;
+  GdkWindow *window;
 
   g_return_if_fail (widget != NULL);
   g_return_if_fail (IS_PIANO (widget));
 
-  GTK_WIDGET_SET_FLAGS (widget, GTK_REALIZED);
   piano = PIANO (widget);
+  gtk_widget_set_realized (widget, TRUE);
+  gtk_widget_get_allocation (widget, &allocation);
 
-  attributes.x = widget->allocation.x;
-  attributes.y = widget->allocation.y;
-  attributes.width = widget->allocation.width;
-  attributes.height = widget->allocation.height;
+  attributes.x = allocation.x;
+  attributes.y = allocation.y;
+  attributes.width = allocation.width;
+  attributes.height = allocation.height;
   attributes.wclass = GDK_INPUT_OUTPUT;
   attributes.window_type = GDK_WINDOW_CHILD;
   attributes.event_mask = gtk_widget_get_events (widget) |
@@ -347,108 +286,29 @@ piano_realize (GtkWidget * widget)
     GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK |
     GDK_POINTER_MOTION_HINT_MASK;
   attributes.visual = gtk_widget_get_visual (widget);
-  attributes.colormap = gtk_widget_get_colormap (widget);
 
-  attributes_mask = GDK_WA_X | GDK_WA_Y | GDK_WA_VISUAL | GDK_WA_COLORMAP;
-  widget->window = gdk_window_new (widget->parent->window, &attributes,
-    attributes_mask);
+  window = gdk_window_new (gtk_widget_get_parent_window (widget),
+    &attributes, GDK_WA_X | GDK_WA_Y | GDK_WA_VISUAL);
+  gtk_widget_set_window (widget, window);
+  gdk_window_set_user_data (window, widget);
 
-  widget->style = gtk_style_attach (widget->style, widget->window);
-
-  gdk_window_set_user_data (widget->window, widget);
-
-  gtk_style_set_background (widget->style, widget->window, GTK_STATE_NORMAL);
-
-  pixmap = gdk_pixmap_new (piano->widget.window, PIANO_DEFAULT_SIZEX, PIANO_DEFAULT_SIZEY, -1);
-  gdk_draw_rectangle (pixmap, piano->widget.style->white_gc, TRUE, 1,
-    1 + POFSY, 674, PIANO_DEFAULT_SIZEY-2);
-  gdk_draw_line (pixmap, piano->widget.style->black_gc, 0, 0 + POFSY, PIANO_DEFAULT_SIZEX-1,
-    0 + POFSY);
-  gdk_draw_line (pixmap, piano->widget.style->black_gc, 0, PIANO_DEFAULT_SIZEY-1 + POFSY, PIANO_DEFAULT_SIZEX-1,
-    PIANO_DEFAULT_SIZEY-1 + POFSY);
-  gdk_draw_line (pixmap, piano->widget.style->black_gc, 1, PIANO_DEFAULT_SIZEY-4 + POFSY, PIANO_DEFAULT_SIZEX-2,
-    PIANO_DEFAULT_SIZEY-4 + POFSY);
-
-  /* allocate color and gc for piano key shadow */
-  piano->shadowgc = gdk_gc_new (piano->widget.window);
-  cmap = gtk_widget_get_colormap (widget);
-  piano->shadclr.red = piano->shadclr.green = piano->shadclr.blue = 49152;
-  gdk_colormap_alloc_color (cmap, &piano->shadclr, FALSE, TRUE);
-  gdk_gc_set_foreground (piano->shadowgc, &piano->shadclr);
-
-  /* allocate color and gc for piano key shadow */
-  piano->blackpressgc = gdk_gc_new (piano->widget.window);
-  cmap = gtk_widget_get_colormap (widget);
-  piano->blackpressclr.red = 65535;
-  piano->blackpressclr.green = 0;
-  piano->blackpressclr.blue = 32768;
-  gdk_colormap_alloc_color (cmap, &piano->blackpressclr, FALSE, TRUE);
-  gdk_gc_set_foreground (piano->blackpressgc, &piano->blackpressclr);
-
-  /* allocate color and gc for note C-60 marker */
-  piano->c60gc = gdk_gc_new (piano->widget.window);
-  piano->c60clr = c60clr;
-  gdk_colormap_alloc_color (cmap, &piano->c60clr, FALSE, TRUE);
-  gdk_gc_set_foreground (piano->c60gc, &piano->c60clr);
-
-  gdk_draw_line (pixmap, piano->shadowgc, 1, PIANO_DEFAULT_SIZEY-3 + POFSY, PIANO_DEFAULT_SIZEX-2, PIANO_DEFAULT_SIZEY-3 + POFSY);
-  gdk_draw_line (pixmap, piano->shadowgc, 1, PIANO_DEFAULT_SIZEY-2 + POFSY, PIANO_DEFAULT_SIZEX-2, PIANO_DEFAULT_SIZEY-2 + POFSY);
-
-  for (i = 0, x = 0; i < 76; i++, x += PIANO_KEY_XWID)
-    {
-      gdk_draw_line (pixmap, piano->widget.style->black_gc, x, 1 + POFSY,
-	x, PIANO_DEFAULT_SIZEY-2 + POFSY);
-      mod = i % 7;
-      if ((mod != 0) && (mod != 3) && (i != 75))
-	gdk_draw_rectangle (pixmap, piano->widget.style->black_gc, TRUE,
-	  x - 1, 1 + POFSY, PIANO_KEY_XWID/2+1, PIANO_DEFAULT_SIZEY/2);
-    }
-
-  /* draw note C-60 marker */
-  gdk_draw_rectangle (pixmap, piano->c60gc, TRUE, PIANO_DEFAULT_SIZEX/2-PIANO_DEFAULT_SIZEX/33-1, PIANO_DEFAULT_SIZEY-13, PIANO_KEY_XWID*2/3, 4);
-  //  gdk_draw_line (pixmap, piano->c60gc, 317, PIANO_DEFAULT_SIZEY*2/3+1, 317, PIANO_DEFAULT_SIZEY/3*2+3);
-  //  gdk_draw_line (pixmap, piano->c60gc, 322, PIANO_DEFAULT_SIZEY*2/3+1, 322, PIANO_DEFAULT_SIZEY/3*2+3);
-
-  piano->keyb_pm = pixmap;
-
-  /* capture small pixmap of white key unselected state */
-  piano->unsw_pm = gdk_pixmap_new (piano->widget.window, PIANO_KEY_XWID-1, 8, -1);
-  gdk_draw_pixmap (piano->unsw_pm,
-    piano->widget.style->fg_gc[GTK_WIDGET_STATE (&piano->widget)],
-    pixmap, 1, PIANO_DEFAULT_SIZEY-8 + POFSY, 0, 0, PIANO_KEY_XWID-1, 8);
-
-  /* copy and modify unselected white key state to get selected white key */
-  piano->selw_pm = gdk_pixmap_new (piano->widget.window, PIANO_KEY_XWID-1, 8, -1);
-  gdk_draw_pixmap (piano->selw_pm,
-    piano->widget.style->fg_gc[GTK_WIDGET_STATE (&piano->widget)],
-    piano->unsw_pm, 0, 0, 0, 0, PIANO_KEY_XWID-1, 8);
-  gdk_draw_rectangle (piano->selw_pm, piano->blackpressgc, TRUE,
-    PIANO_KEY_XWID/4, 0, PIANO_KEY_XWID/2, 4);
-  gdk_draw_rectangle (piano->selw_pm, piano->widget.style->white_gc, TRUE,
-    0, 4, PIANO_KEY_XWID-1, 3);
-
-  /* capture small pixmap of black key unselected state */
-  piano->unsb_pm = gdk_pixmap_new (piano->widget.window, PIANO_KEY_XWID/2+1, 8, -1);
-  gdk_draw_pixmap (piano->unsb_pm,
-    piano->widget.style->fg_gc[GTK_WIDGET_STATE (&piano->widget)],
-    pixmap, PIANO_KEY_XWID-1,PIANO_DEFAULT_SIZEY/5 + POFSY, 0, 0, PIANO_KEY_XWID/2+1, 8);
-
-  /* copy and modify unselected black key state to get selected black key */
-  piano->selb_pm = gdk_pixmap_new (piano->widget.window, PIANO_KEY_XWID/2+1, 8, -1);
-  gdk_draw_pixmap (piano->selb_pm,
-    piano->widget.style->fg_gc[GTK_WIDGET_STATE (&piano->widget)],
-    piano->unsb_pm, 0, 0, 0, 0, PIANO_KEY_XWID/2+1, 8);
-  gdk_draw_rectangle (piano->selb_pm, piano->blackpressgc, TRUE,
-    0, 0, PIANO_KEY_XWID/2+1, 5);
-//  gdk_draw_line (piano->selb_pm, piano->widget.style->black_gc, 0, 7, 1, 7);
-  gdk_draw_line (piano->selb_pm, piano->widget.style->black_gc, 0, 7, PIANO_KEY_XWID/2, 7);
+  if (piano->keyb_surface)
+    cairo_surface_destroy (piano->keyb_surface);
+  piano->keyb_surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+    PIANO_DEFAULT_SIZEX, PIANO_DEFAULT_SIZEY);
+  draw_keyboard_surface (piano);
 }
 
 static void
-piano_size_request (GtkWidget * widget, GtkRequisition * requisition)
+piano_get_preferred_width (GtkWidget * widget, gint * min, gint * nat)
 {
-  requisition->width = PIANO_DEFAULT_SIZEX+5;
-  requisition->height = PIANO_DEFAULT_SIZEY;
+  *min = *nat = PIANO_DEFAULT_SIZEX + 5;
+}
+
+static void
+piano_get_preferred_height (GtkWidget * widget, gint * min, gint * nat)
+{
+  *min = *nat = PIANO_DEFAULT_SIZEY;
 }
 
 static void
@@ -458,31 +318,194 @@ piano_size_allocate (GtkWidget * widget, GtkAllocation * allocation)
   g_return_if_fail (IS_PIANO (widget));
   g_return_if_fail (allocation != NULL);
 
-  widget->allocation = *allocation;
+  gtk_widget_set_allocation (widget, allocation);
 
-  if (GTK_WIDGET_REALIZED (widget))
-    {
-      gdk_window_move_resize (widget->window, allocation->x, allocation->y,
-	allocation->width, allocation->height);
-    }
+  if (gtk_widget_get_realized (widget))
+    gdk_window_move_resize (gtk_widget_get_window (widget),
+      allocation->x, allocation->y,
+      allocation->width, allocation->height);
 }
 
-static gint
-piano_expose (GtkWidget * widget, GdkEventExpose * event)
+/* Fast blit of the pre-rendered backing surface */
+static gboolean
+piano_draw (GtkWidget * widget, cairo_t * cr)
 {
   Piano *piano;
 
   g_return_val_if_fail (widget != NULL, FALSE);
   g_return_val_if_fail (IS_PIANO (widget), FALSE);
-  g_return_val_if_fail (event != NULL, FALSE);
 
   piano = PIANO (widget);
 
-  gdk_draw_pixmap (widget->window,
-    widget->style->fg_gc[GTK_WIDGET_STATE (widget)],
-    piano->keyb_pm, event->area.x, event->area.y,
-    event->area.x, event->area.y, event->area.width, event->area.height);
+  if (piano->keyb_surface)
+    {
+      cairo_set_source_surface (cr, piano->keyb_surface, 0, 0);
+      cairo_paint (cr);
+    }
 
   return FALSE;
 }
 
+/* Draw (or redraw) a single key into the backing surface */
+static void
+draw_key_on_surface (Piano * piano, int note, gboolean pressed)
+{
+  cairo_t *cr;
+  int mod, xval;
+
+  if (!piano->keyb_surface)
+    return;
+
+  mod = note % 12;
+  xval = (note / 12) * (PIANO_KEY_XWID * 7) + keyinfo[mod].dispx;
+
+  cr = cairo_create (piano->keyb_surface);
+
+  if (keyinfo[mod].white)
+    {
+      int x = xval - 1;
+      int y = PIANO_DEFAULT_SIZEY - 8 + POFSY;
+      int w = PIANO_KEY_XWID - 1;	/* = 4 */
+
+      /* White key bottom region: restore to white */
+      cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+      cairo_rectangle (cr, x, y, w, 8);
+      cairo_fill (cr);
+
+      if (pressed)
+        {
+          /* Pink highlight strip in upper half */
+          cairo_set_source_rgb (cr, 1.0, 0.0, 0.5);
+          cairo_rectangle (cr, x + PIANO_KEY_XWID / 4, y, PIANO_KEY_XWID / 2, 4);
+          cairo_fill (cr);
+          /* White lower half — shadow lines intentionally absent when pressed */
+          cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+          cairo_rectangle (cr, x, y + 4, w, 4);
+          cairo_fill (cr);
+        }
+      else
+        {
+          /* Restore the horizontal lines erased by the white fill */
+          cairo_set_line_width (cr, 1.0);
+          cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+          cairo_move_to (cr, x, PIANO_DEFAULT_SIZEY - 3.5 + POFSY);
+          cairo_line_to (cr, x + w, PIANO_DEFAULT_SIZEY - 3.5 + POFSY);
+          cairo_stroke (cr);
+          cairo_set_source_rgb (cr, 0.75, 0.75, 0.75);
+          cairo_move_to (cr, x, PIANO_DEFAULT_SIZEY - 2.5 + POFSY);
+          cairo_line_to (cr, x + w, PIANO_DEFAULT_SIZEY - 2.5 + POFSY);
+          cairo_stroke (cr);
+          cairo_move_to (cr, x, PIANO_DEFAULT_SIZEY - 1.5 + POFSY);
+          cairo_line_to (cr, x + w, PIANO_DEFAULT_SIZEY - 1.5 + POFSY);
+          cairo_stroke (cr);
+          cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+          cairo_move_to (cr, x, PIANO_DEFAULT_SIZEY - 0.5 + POFSY);
+          cairo_line_to (cr, x + w, PIANO_DEFAULT_SIZEY - 0.5 + POFSY);
+          cairo_stroke (cr);
+        }
+    }
+  else
+    {
+      int x = xval;
+      int y = PIANO_DEFAULT_SIZEY / 5 + POFSY;	/* = 4 */
+      int w = PIANO_KEY_XWID / 2 + 1;	/* = 3 */
+
+      if (pressed)
+        {
+          /* Magenta highlight top 5 rows */
+          cairo_set_source_rgb (cr, 1.0, 0.0, 0.5);
+          cairo_rectangle (cr, x, y, w, 5);
+          cairo_fill (cr);
+          /* Black bottom rows */
+          cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+          cairo_rectangle (cr, x, y + 5, w, 2);
+          cairo_fill (cr);
+          /* Black bottom line */
+          cairo_move_to (cr, x, y + 7);
+          cairo_line_to (cr, x + w, y + 7);
+          cairo_stroke (cr);
+        }
+      else
+        {
+          /* Solid black */
+          cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+          cairo_rectangle (cr, x, y, w, 8);
+          cairo_fill (cr);
+        }
+    }
+
+  cairo_destroy (cr);
+}
+
+/* Draw the full keyboard into the backing surface (all keys unpressed) */
+static void
+draw_keyboard_surface (Piano * piano)
+{
+  cairo_t *cr;
+  int i, x, mod;
+
+  if (!piano->keyb_surface)
+    return;
+
+  cr = cairo_create (piano->keyb_surface);
+
+  /* White background */
+  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+  cairo_rectangle (cr, 1, 1 + POFSY, PIANO_DEFAULT_SIZEX - 2, PIANO_DEFAULT_SIZEY - 2);
+  cairo_fill (cr);
+
+  /* Top and bottom border lines */
+  cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+  cairo_set_line_width (cr, 1.0);
+
+  cairo_move_to (cr, 0, 0.5 + POFSY);
+  cairo_line_to (cr, PIANO_DEFAULT_SIZEX, 0.5 + POFSY);
+  cairo_stroke (cr);
+
+  cairo_move_to (cr, 0, PIANO_DEFAULT_SIZEY - 0.5 + POFSY);
+  cairo_line_to (cr, PIANO_DEFAULT_SIZEX, PIANO_DEFAULT_SIZEY - 0.5 + POFSY);
+  cairo_stroke (cr);
+
+  cairo_move_to (cr, 1, PIANO_DEFAULT_SIZEY - 3.5 + POFSY);
+  cairo_line_to (cr, PIANO_DEFAULT_SIZEX - 1, PIANO_DEFAULT_SIZEY - 3.5 + POFSY);
+  cairo_stroke (cr);
+
+  /* Shadow lines (gray) — original shadclr = 49152/65535 ≈ 0.75 */
+  cairo_set_source_rgb (cr, 0.75, 0.75, 0.75);
+  cairo_move_to (cr, 1, PIANO_DEFAULT_SIZEY - 2.5 + POFSY);
+  cairo_line_to (cr, PIANO_DEFAULT_SIZEX - 1, PIANO_DEFAULT_SIZEY - 2.5 + POFSY);
+  cairo_stroke (cr);
+  cairo_move_to (cr, 1, PIANO_DEFAULT_SIZEY - 1.5 + POFSY);
+  cairo_line_to (cr, PIANO_DEFAULT_SIZEX - 1, PIANO_DEFAULT_SIZEY - 1.5 + POFSY);
+  cairo_stroke (cr);
+
+  /* White key separators and black key rectangles */
+  for (i = 0, x = 0; i < 76; i++, x += PIANO_KEY_XWID)
+    {
+      /* White key separator line */
+      cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+      cairo_move_to (cr, x + 0.5, 1 + POFSY);
+      cairo_line_to (cr, x + 0.5, PIANO_DEFAULT_SIZEY - 1 + POFSY);
+      cairo_stroke (cr);
+
+      /* Black key rectangle (not on positions 0, 3 or last key) */
+      mod = i % 7;
+      if ((mod != 0) && (mod != 3) && (i != 75))
+        {
+          cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+          cairo_rectangle (cr, x - 1, 1 + POFSY,
+            PIANO_KEY_XWID / 2 + 1, PIANO_DEFAULT_SIZEY / 2);
+          cairo_fill (cr);
+        }
+    }
+
+  /* Middle-C marker (C60) — original c60clr = 18000/65535 ≈ 0.27, 0, 54000/65535 ≈ 0.82 */
+  cairo_set_source_rgb (cr, 0.27, 0.0, 0.82);
+  cairo_rectangle (cr,
+    PIANO_DEFAULT_SIZEX / 2 - PIANO_DEFAULT_SIZEX / 33 - 1,
+    PIANO_DEFAULT_SIZEY - 13,
+    PIANO_KEY_XWID * 2 / 3, 4);
+  cairo_fill (cr);
+
+  cairo_destroy (cr);
+}

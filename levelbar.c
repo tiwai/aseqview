@@ -25,6 +25,13 @@
 #include <stdlib.h>
 
 /*
+ * RGB color stored as doubles in [0.0, 1.0]
+ */
+typedef struct {
+	double r, g, b;
+} BarColor;
+
+/*
  * status bar instance record
  */
 enum {
@@ -39,7 +46,7 @@ struct status_bar_t {
 	unsigned short width, height;	/* widget size */
 	int minval, maxval, defval, curval, cached_val;	/* values */
 	unsigned short drawn, step;
-	GdkColor color;
+	BarColor color;
 	char delayed, updated;
 	guint32 timer;
 };
@@ -55,7 +62,7 @@ struct level_bar_t {
 	int level;
 	unsigned short lv_drawn;
 	int fall_dec;
-	GdkColor lv_color;
+	BarColor lv_color;
 };
 
 /* constants for level bar */
@@ -68,19 +75,24 @@ struct level_bar_t {
  * protoypes
  */
 static GtkWidget *bar_widget_new(status_bar_t *bar, int type, int width, int height, int minval, int maxval, int defval, int delayed, int step);
-static gint update_timer(GtkWidget *w);
+static gboolean update_timer(gpointer data);
 static void fall_level(GtkWidget *w, level_bar_t *lv);
-static void draw_level(GtkWidget *w, level_bar_t *arg);
-static void draw_solid(GtkWidget *w, status_bar_t *arg);
-static void draw_arrow(GtkWidget *w, status_bar_t *arg);
+static void draw_level(cairo_t *cr, level_bar_t *arg);
+static void draw_solid(cairo_t *cr, status_bar_t *arg);
+static void draw_arrow(cairo_t *cr, status_bar_t *arg);
 static void update_bar(GtkWidget *w, status_bar_t *arg, int curval);
-static int expose_bar(GtkWidget *w);
-
+static gboolean draw_bar(GtkWidget *w, cairo_t *cr, gpointer data);
 
 /*
- * local common variables
+ * store color as doubles
  */
-static GdkGC *gc;	/* we use the shared gc */
+static void
+alloc_color(BarColor *color, int red, int green, int blue)
+{
+	color->r = red / 65535.0;
+	color->g = green / 65535.0;
+	color->b = blue / 65535.0;
+}
 
 /*
  * align to the step size (for level bar)
@@ -150,7 +162,7 @@ arrow_bar_new(int width, int height, int minval, int maxval, int defval, int del
 void
 channel_status_bar_update(GtkWidget *w, int val)
 {
-	status_bar_t *bar = gtk_object_get_user_data(GTK_OBJECT(w));
+	status_bar_t *bar = g_object_get_data(G_OBJECT(w), "bar_data");
 	if (bar->curval != val)
 		update_bar(w, bar, val);
 }
@@ -161,7 +173,7 @@ channel_status_bar_update(GtkWidget *w, int val)
 void
 channel_status_bar_set_color_rgb(GtkWidget *w, int r, int g, int b)
 {
-	status_bar_t *bar = gtk_object_get_user_data(GTK_OBJECT(w));
+	status_bar_t *bar = g_object_get_data(G_OBJECT(w), "bar_data");
 	alloc_color(&bar->color, r, g, b);
 }
 
@@ -171,7 +183,7 @@ channel_status_bar_set_color_rgb(GtkWidget *w, int r, int g, int b)
 void
 level_bar_set_level_color_rgb(GtkWidget *w, int r, int g, int b)
 {
-	level_bar_t *bar = gtk_object_get_user_data(GTK_OBJECT(w));
+	level_bar_t *bar = g_object_get_data(G_OBJECT(w), "bar_data");
 	alloc_color(&bar->lv_color, r, g, b);
 }
 
@@ -201,45 +213,27 @@ bar_widget_new(status_bar_t *bar, int type, int width, int height,
 	alloc_color(&bar->color, 0xffff, 0xffff, 0xffff);
 
 	w = gtk_drawing_area_new();
-	gtk_drawing_area_size(GTK_DRAWING_AREA(w), width, height);
-	gtk_object_set_user_data(GTK_OBJECT(w), bar);
+	gtk_widget_set_size_request(w, width, height);
+	g_object_set_data(G_OBJECT(w), "bar_data", bar);
 	gtk_widget_set_events(w, GDK_EXPOSURE_MASK);
-	gtk_signal_connect(GTK_OBJECT(w), "expose_event",
-			   GTK_SIGNAL_FUNC(expose_bar),
-			   NULL);
+	g_signal_connect(G_OBJECT(w), "draw",
+			 G_CALLBACK(draw_bar), NULL);
 	if (delayed)
-		bar->timer = gtk_timeout_add(BAR_TIMER_PERIOD,
-					     (GtkFunction)update_timer,
-					     (gpointer)w);
+		bar->timer = g_timeout_add(BAR_TIMER_PERIOD, update_timer, w);
 
 	return w;
 }
 
 /*
- * allocate color
- */
-void
-alloc_color(GdkColor *color, int red, int green, int blue)
-{
-	GdkColormap *cmap;
-
-	cmap = gdk_colormap_get_system();
-	color->red = red;
-	color->green = green;
-	color->blue = blue;
-	if (! gdk_color_alloc(cmap, color))
-		g_error("can't allocate color");
-}
-
-
-/*
  * timer callback
  */
-static gint
-update_timer(GtkWidget *w)
+static gboolean
+update_timer(gpointer data)
 {
-	status_bar_t *bar = gtk_object_get_user_data(GTK_OBJECT(w));
+	GtkWidget *w = GTK_WIDGET(data);
+	status_bar_t *bar = g_object_get_data(G_OBJECT(w), "bar_data");
 	int drawn;
+
 	if (bar->updated) {
 		drawn = convert_drawn(bar, bar->cached_val);
 		if (drawn == bar->drawn)
@@ -250,7 +244,7 @@ update_timer(GtkWidget *w)
 	if (bar->type == BAR_TYPE_LEVEL)
 		fall_level(w, (level_bar_t*)bar);
 	if (bar->updated)
-		expose_bar(w);
+		gtk_widget_queue_draw(w);
 	if (bar->cached_val != bar->curval) {
 		bar->cached_val = bar->curval;
 		bar->updated = TRUE;
@@ -293,62 +287,61 @@ fall_level(GtkWidget *w, level_bar_t *lv)
  * draw level bar
  */
 static void
-draw_level(GtkWidget *w, level_bar_t *arg)
+draw_level(cairo_t *cr, level_bar_t *arg)
 {
 	int i;
 
-	gdk_draw_rectangle(w->window,
-			   w->style->black_gc,
-			   TRUE,
-			   0, 0, arg->st.width, arg->st.height);
-	gdk_gc_set_foreground(gc, &arg->st.color);
-	for (i = 0; i < arg->st.drawn; i += LEVEL_STEP)
-		gdk_draw_rectangle(w->window, gc, TRUE,
-				   i, 0, LEVEL_STEP-1, arg->st.height);
-	gdk_gc_set_foreground(gc, &arg->lv_color);
-	gdk_draw_rectangle(w->window, gc, TRUE, arg->lv_drawn, 0,
-			   LEVEL_STEP-1, arg->st.height);
+	cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+	cairo_rectangle(cr, 0, 0, arg->st.width, arg->st.height);
+	cairo_fill(cr);
+
+	cairo_set_source_rgb(cr, arg->st.color.r, arg->st.color.g, arg->st.color.b);
+	for (i = 0; i < arg->st.drawn; i += LEVEL_STEP) {
+		cairo_rectangle(cr, i, 0, LEVEL_STEP - 1, arg->st.height);
+		cairo_fill(cr);
+	}
+
+	cairo_set_source_rgb(cr, arg->lv_color.r, arg->lv_color.g, arg->lv_color.b);
+	cairo_rectangle(cr, arg->lv_drawn, 0, LEVEL_STEP - 1, arg->st.height);
+	cairo_fill(cr);
 }
 
 /*
  * draw solid bar
  */
 static void
-draw_solid(GtkWidget *w, status_bar_t *arg)
+draw_solid(cairo_t *cr, status_bar_t *arg)
 {
-	gdk_draw_rectangle(w->window,
-			   w->style->black_gc,
-			   TRUE,
-			   0, 0, arg->width, arg->height);
-	gdk_gc_set_foreground(gc, &arg->color);
-	gdk_draw_rectangle(w->window,
-			   gc, TRUE,
-			   0, 0, arg->drawn + 1, arg->height);
+	cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+	cairo_rectangle(cr, 0, 0, arg->width, arg->height);
+	cairo_fill(cr);
+
+	cairo_set_source_rgb(cr, arg->color.r, arg->color.g, arg->color.b);
+	cairo_rectangle(cr, 0, 0, arg->drawn + 1, arg->height);
+	cairo_fill(cr);
 }
 
 /*
  * draw arrow bar
  */
 static void
-draw_arrow(GtkWidget *w, status_bar_t *arg)
+draw_arrow(cairo_t *cr, status_bar_t *arg)
 {
-	GdkPoint p[3];
+	cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+	cairo_rectangle(cr, 0, 0, arg->width, arg->height);
+	cairo_fill(cr);
 
-	gdk_draw_rectangle(w->window,
-			   w->style->black_gc,
-			   TRUE,
-			   0, 0, arg->width, arg->height);
-	p[0].x = arg->drawn+1;
-	p[0].y = arg->height / 2;
-	p[1].x = arg->width - arg->drawn - 1;
-	p[1].y = 0;
-	p[2].x = p[1].x;
-	p[2].y = arg->height - 1;
-	gdk_gc_set_foreground(gc, &arg->color);
-	gdk_draw_polygon(w->window,
-			 gc, TRUE, p, 3);
-	gdk_draw_line(w->window,
-		      gc, p[1].x, p[1].y, p[2].x, p[2].y);
+	cairo_set_source_rgb(cr, arg->color.r, arg->color.g, arg->color.b);
+	cairo_move_to(cr, arg->drawn + 1, arg->height / 2);
+	cairo_line_to(cr, arg->width - arg->drawn - 1, 0);
+	cairo_line_to(cr, arg->width - arg->drawn - 1, arg->height - 1);
+	cairo_close_path(cr);
+	cairo_fill(cr);
+
+	cairo_set_source_rgb(cr, arg->color.r, arg->color.g, arg->color.b);
+	cairo_move_to(cr, arg->width - arg->drawn - 1, 0);
+	cairo_line_to(cr, arg->width - arg->drawn - 1, arg->height - 1);
+	cairo_stroke(cr);
 }
 
 /*
@@ -372,7 +365,7 @@ update_bar(GtkWidget *w, status_bar_t *arg, int curval)
 	arg->curval = curval;
 	if (arg->delayed) {
 		/* redrawn in timeout callback -
-		 * we here only check the highet value
+		 * we here only check the highest value
 		 */
 		int delta = val_diff(arg, curval);
 		int delta_c = val_diff(arg, arg->cached_val);
@@ -386,28 +379,27 @@ update_bar(GtkWidget *w, status_bar_t *arg, int curval)
 		if (drawn == arg->drawn)
 			return;
 		arg->drawn = drawn;
-		expose_bar(w);
+		gtk_widget_queue_draw(w);
 	}
 }
 
 /*
- * signal exposed_event
+ * draw callback (GTK3 "draw" signal)
  */
-static int
-expose_bar(GtkWidget *w)
+static gboolean
+draw_bar(GtkWidget *w, cairo_t *cr, gpointer data)
 {
-	status_bar_t *arg = gtk_object_get_user_data(GTK_OBJECT(w));
-	if (gc == NULL)
-		gc = gdk_gc_new(w->window); /* FIXME: i know it's not good.. */
+	status_bar_t *arg = g_object_get_data(G_OBJECT(w), "bar_data");
+
 	switch (arg->type) {
 	case BAR_TYPE_LEVEL:
-		draw_level(w, (level_bar_t*)arg);
+		draw_level(cr, (level_bar_t*)arg);
 		break;
 	case BAR_TYPE_SOLID:
-		draw_solid(w, arg);
+		draw_solid(cr, arg);
 		break;
 	case BAR_TYPE_ARROW:
-		draw_arrow(w, arg);
+		draw_arrow(cr, arg);
 		break;
 	}
 	return FALSE;
