@@ -1,4 +1,7 @@
+*.o
+*~
 .deps
+compile
 config.h
 config.h.in
 configure
