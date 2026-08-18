@@ -24,6 +24,14 @@
 #include "levelbar.h"
 #include <stdlib.h>
 
+#ifdef USE_GTK4
+/* GTK4: draw function registered via gtk_drawing_area_set_draw_func */
+static void draw_bar (GtkDrawingArea * da, cairo_t * cr,
+		      int width, int height, gpointer data);
+#else
+static gboolean draw_bar (GtkWidget * w, cairo_t * cr, gpointer data);
+#endif
+
 /*
  * RGB color stored as doubles in [0.0, 1.0]
  */
@@ -81,7 +89,6 @@ static void draw_level(cairo_t *cr, level_bar_t *arg);
 static void draw_solid(cairo_t *cr, status_bar_t *arg);
 static void draw_arrow(cairo_t *cr, status_bar_t *arg);
 static void update_bar(GtkWidget *w, status_bar_t *arg, int curval);
-static gboolean draw_bar(GtkWidget *w, cairo_t *cr, gpointer data);
 
 /*
  * store color as doubles
@@ -215,9 +222,12 @@ bar_widget_new(status_bar_t *bar, int type, int width, int height,
 	w = gtk_drawing_area_new();
 	gtk_widget_set_size_request(w, width, height);
 	g_object_set_data(G_OBJECT(w), "bar_data", bar);
+#ifdef USE_GTK4
+	gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(w), draw_bar, NULL, NULL);
+#else
 	gtk_widget_set_events(w, GDK_EXPOSURE_MASK);
-	g_signal_connect(G_OBJECT(w), "draw",
-			 G_CALLBACK(draw_bar), NULL);
+	g_signal_connect(G_OBJECT(w), "draw", G_CALLBACK(draw_bar), NULL);
+#endif
 	if (delayed)
 		bar->timer = g_timeout_add(BAR_TIMER_PERIOD, update_timer, w);
 
@@ -384,12 +394,12 @@ update_bar(GtkWidget *w, status_bar_t *arg, int curval)
 }
 
 /*
- * draw callback (GTK3 "draw" signal)
+ * draw callback — implementation shared between GTK3 and GTK4
  */
-static gboolean
-draw_bar(GtkWidget *w, cairo_t *cr, gpointer data)
+static void
+draw_bar_impl(GObject *obj, cairo_t *cr)
 {
-	status_bar_t *arg = g_object_get_data(G_OBJECT(w), "bar_data");
+	status_bar_t *arg = g_object_get_data(obj, "bar_data");
 
 	switch (arg->type) {
 	case BAR_TYPE_LEVEL:
@@ -402,5 +412,19 @@ draw_bar(GtkWidget *w, cairo_t *cr, gpointer data)
 		draw_arrow(cr, arg);
 		break;
 	}
+}
+
+#ifdef USE_GTK4
+static void
+draw_bar(GtkDrawingArea *da, cairo_t *cr, int width, int height, gpointer data)
+{
+	draw_bar_impl(G_OBJECT(da), cr);
+}
+#else
+static gboolean
+draw_bar(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+	draw_bar_impl(G_OBJECT(w), cr);
 	return FALSE;
 }
+#endif

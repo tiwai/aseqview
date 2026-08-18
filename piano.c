@@ -23,6 +23,10 @@
 #include <string.h>
 #include <gtk/gtk.h>
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include "piano.h"
 
 /* Forward declarations */
@@ -30,11 +34,18 @@
 static void piano_class_init (PianoClass * klass);
 static void piano_init (Piano * piano);
 static void piano_destroy (GObject * object);
+#ifdef USE_GTK4
+static void piano_snapshot (GtkWidget * widget, GtkSnapshot * snapshot);
+static void piano_measure (GtkWidget * widget, GtkOrientation orientation,
+			   int for_size, int * minimum, int * natural,
+			   int * minimum_baseline, int * natural_baseline);
+#else
 static void piano_realize (GtkWidget * widget);
 static void piano_get_preferred_width (GtkWidget * widget, gint * min, gint * nat);
 static void piano_get_preferred_height (GtkWidget * widget, gint * min, gint * nat);
 static void piano_size_allocate (GtkWidget * widget, GtkAllocation * allocation);
 static gboolean piano_draw (GtkWidget * widget, cairo_t * cr);
+#endif
 static void draw_keyboard_surface (Piano * piano);
 static void draw_key_on_surface (Piano * piano, int note, gboolean pressed);
 
@@ -80,11 +91,16 @@ piano_class_init (PianoClass * klass)
 
   object_class->finalize = piano_destroy;
 
+#ifdef USE_GTK4
+  widget_class->snapshot = piano_snapshot;
+  widget_class->measure = piano_measure;
+#else
   widget_class->realize = piano_realize;
   widget_class->draw = piano_draw;
   widget_class->get_preferred_width = piano_get_preferred_width;
   widget_class->get_preferred_height = piano_get_preferred_height;
   widget_class->size_allocate = piano_size_allocate;
+#endif
 
   klass->note_on = NULL;
   klass->note_off = NULL;
@@ -109,7 +125,9 @@ piano_class_init (PianoClass * klass)
 static void
 piano_init (Piano * piano)
 {
+#ifndef USE_GTK4
   gtk_widget_set_has_window (GTK_WIDGET (piano), TRUE);
+#endif
 }
 
 GtkWidget *
@@ -150,6 +168,9 @@ piano_note_on (Piano * piano, guint8 keynum)
 
   mod = keynum % 12;
   xval = keynum / 12 * (PIANO_KEY_XWID * 7) + keyinfo[mod].dispx;
+#ifdef USE_GTK4
+  gtk_widget_queue_draw (GTK_WIDGET (piano));
+#else
   if (keyinfo[mod].white)
     gtk_widget_queue_draw_area (GTK_WIDGET (piano),
       xval - 1, PIANO_DEFAULT_SIZEY - 8 + POFSY,
@@ -158,6 +179,7 @@ piano_note_on (Piano * piano, guint8 keynum)
     gtk_widget_queue_draw_area (GTK_WIDGET (piano),
       xval, PIANO_DEFAULT_SIZEY / 5 + POFSY,
       PIANO_KEY_XWID / 2 + 1, 8);
+#endif
 }
 
 /* draws specified key in its "released" state */
@@ -184,6 +206,9 @@ piano_note_off (Piano * piano, guint8 keynum)
 
   mod = keynum % 12;
   xval = keynum / 12 * 7 * PIANO_KEY_XWID + keyinfo[mod].dispx;
+#ifdef USE_GTK4
+  gtk_widget_queue_draw (GTK_WIDGET (piano));
+#else
   if (keyinfo[mod].white)
     gtk_widget_queue_draw_area (GTK_WIDGET (piano),
       xval - 1, PIANO_DEFAULT_SIZEY - 8 + POFSY,
@@ -192,6 +217,7 @@ piano_note_off (Piano * piano, guint8 keynum)
     gtk_widget_queue_draw_area (GTK_WIDGET (piano),
       xval, PIANO_DEFAULT_SIZEY / 5 + POFSY,
       PIANO_KEY_XWID / 2 + 1, 8);
+#endif
 }
 
 /* converts a key number to x position in pixels to center of key */
@@ -259,6 +285,57 @@ piano_destroy (GObject * object)
 
   G_OBJECT_CLASS (piano_parent_class)->finalize (object);
 }
+
+#ifdef USE_GTK4
+
+static void
+piano_snapshot (GtkWidget * widget, GtkSnapshot * snapshot)
+{
+  Piano *piano;
+  graphene_rect_t rect;
+  cairo_t *cr;
+  int width, height;
+
+  g_return_if_fail (widget != NULL);
+  g_return_if_fail (IS_PIANO (widget));
+
+  piano = PIANO (widget);
+  width = gtk_widget_get_width (widget);
+  height = gtk_widget_get_height (widget);
+
+  if (!piano->keyb_surface)
+    {
+      piano->keyb_surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+        PIANO_DEFAULT_SIZEX, PIANO_DEFAULT_SIZEY);
+      draw_keyboard_surface (piano);
+    }
+
+  if (piano->keyb_surface)
+    {
+      rect = GRAPHENE_RECT_INIT (0, 0, width, height);
+      cr = gtk_snapshot_append_cairo (snapshot, &rect);
+      cairo_set_source_surface (cr, piano->keyb_surface, 0, 0);
+      cairo_paint (cr);
+      cairo_destroy (cr);
+    }
+}
+
+static void
+piano_measure (GtkWidget * widget, GtkOrientation orientation, int for_size,
+	       int * minimum, int * natural,
+	       int * minimum_baseline, int * natural_baseline)
+{
+  if (orientation == GTK_ORIENTATION_HORIZONTAL)
+    *minimum = *natural = PIANO_DEFAULT_SIZEX + 5;
+  else
+    *minimum = *natural = PIANO_DEFAULT_SIZEY;
+  if (minimum_baseline)
+    *minimum_baseline = -1;
+  if (natural_baseline)
+    *natural_baseline = -1;
+}
+
+#else /* GTK3 */
 
 static void
 piano_realize (GtkWidget * widget)
@@ -345,6 +422,8 @@ piano_draw (GtkWidget * widget, cairo_t * cr)
 
   return FALSE;
 }
+
+#endif /* USE_GTK4 */
 
 /* Draw (or redraw) a single key into the backing surface */
 static void

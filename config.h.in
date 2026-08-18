@@ -65,6 +65,9 @@
    backward compatibility; new code need not use it. */
 #undef STDC_HEADERS
 
+/* Build with GTK 4 */
+#undef USE_GTK4
+
 /* Version number of package */
 #undef VERSION
 

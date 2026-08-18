@@ -34,6 +34,47 @@
 #include "piano.h" // From swami.
 #include "portlib.h"
 
+#ifdef USE_GTK4
+/* ---- GTK4 compatibility layer ---- */
+static GMainLoop *main_loop;
+
+/* Inline helper: replicates gtk_box_pack_start expand semantics */
+static inline void compat_pack_start(GtkBox *box, GtkWidget *child,
+				     gboolean expand, gboolean fill, guint pad)
+{
+	if (expand) {
+		GtkOrientation orient = gtk_orientable_get_orientation(GTK_ORIENTABLE(box));
+		if (orient == GTK_ORIENTATION_VERTICAL)
+			gtk_widget_set_vexpand(child, TRUE);
+		else
+			gtk_widget_set_hexpand(child, TRUE);
+	}
+	gtk_box_append(box, child);
+}
+
+#define gtk_vbox_new(h, s)	gtk_box_new(GTK_ORIENTATION_VERTICAL, (s))
+#define gtk_hbox_new(h, s)	gtk_box_new(GTK_ORIENTATION_HORIZONTAL, (s))
+#define gtk_hseparator_new()	gtk_separator_new(GTK_ORIENTATION_HORIZONTAL)
+#define gtk_vseparator_new()	gtk_separator_new(GTK_ORIENTATION_VERTICAL)
+#define gtk_hscale_new(adj)	gtk_scale_new(GTK_ORIENTATION_HORIZONTAL, (adj))
+#define gtk_box_pack_start(box, child, exp, fill, pad) \
+	compat_pack_start(GTK_BOX(box), (child), (exp), (fill), (pad))
+/* GtkTable was removed in GTK4; map to GtkGrid */
+typedef GtkGrid GtkTable;
+#define GTK_TABLE(x)		GTK_GRID(x)
+#define gtk_table_new(r, c, h)	gtk_grid_new()
+#define gtk_table_attach_defaults(t, w, l, r, top, bot) \
+	gtk_grid_attach(GTK_GRID(t), (w), (l), (top), (r) - (l), (bot) - (top))
+#define gtk_table_set_col_spacing(t, col, spc) \
+	gtk_grid_set_column_spacing(GTK_GRID(t), (spc))
+/* gtk_toggle_button_set_mode removed in GTK4 */
+#define gtk_toggle_button_set_mode(w, m)	/* no-op */
+/* Event masks no longer apply to drawing areas */
+#define GDK_EXPOSURE_MASK	0
+#define gtk_widget_set_events(w, e)	/* no-op */
+/* ---- end GTK4 compatibility layer ---- */
+#endif /* USE_GTK4 */
+
 #define MAX_PORTS		20
 #define MIDI_CHANNELS	16
 #define NUM_KEYS		128
@@ -143,16 +184,26 @@ static void usage(void);
 static midi_status_t *midi_status_new(int);
 static void midi_status_free(midi_status_t *);
 static void create_port_window(port_status_t *);
+#ifdef USE_GTK4
+static gboolean quit(GtkWindow *, gpointer);
+#else
 static int quit(GtkWidget *);
+#endif
 static GtkWidget *create_viewer(port_status_t *);
 static void create_viewer_titles(GtkWidget *);
 static void create_channel_viewer(GtkWidget *, port_status_t *, int);
 static void mute_channel(GtkToggleButton *, channel_status_t *);
 static GtkWidget *display_midi_init(GtkWidget *, midi_status_t *);
 static cairo_surface_t *create_midi_pixmap(char *, int, int, int, int *);
+#ifdef USE_GTK4
+static void draw_midi_mode(GtkDrawingArea *, cairo_t *, int, int, gpointer);
+static void draw_temper_keysig(GtkDrawingArea *, cairo_t *, int, int, gpointer);
+static void draw_temper_type(GtkDrawingArea *, cairo_t *, int, int, gpointer);
+#else
 static gboolean draw_midi_mode(GtkWidget *, cairo_t *, gpointer);
 static gboolean draw_temper_keysig(GtkWidget *, cairo_t *, gpointer);
 static gboolean draw_temper_type(GtkWidget *, cairo_t *, gpointer);
+#endif
 static gboolean update_time(gpointer);
 static void suppress_temper_type(GtkToggleButton *, midi_status_t *);
 static GtkWidget *create_pitch_changer(midi_status_t *);
@@ -238,7 +289,11 @@ int main(int argc, char **argv)
 	midi_status_t *st;
 	port_status_t *port;
 	
+#ifdef USE_GTK4
+	gtk_init();
+#else
 	gtk_init(&argc, &argv);
+#endif
 	for (p = 0; p < MAX_PORTS; p++)
 		src_client[p] = dest_client[p] = -1;
 	while ((c = getopt_long(argc, argv, "orp:s:d:T::tmP",
@@ -339,7 +394,12 @@ int main(int argc, char **argv)
 		if (rt_prio)
 			set_realtime_priority(SCHED_FIFO);
 	}
+#ifdef USE_GTK4
+	main_loop = g_main_loop_new(NULL, FALSE);
+	g_main_loop_run(main_loop);
+#else
 	gtk_main();
+#endif
 	if (use_thread) {
 		port_client_stop(st->client);
 		pthread_join(midi_thread, NULL);
@@ -347,6 +407,9 @@ int main(int argc, char **argv)
 	midi_status_free(st);
 	if (use_thread)
 		av_ringbuf_free();
+#ifdef USE_GTK4
+	g_main_loop_unref(main_loop);
+#endif
 	return 0;
 }
 
@@ -504,16 +567,27 @@ static void create_port_window(port_status_t *port)
 	char name[64];
 	int client = port_client_get_id(port->main->client);
 	
+#ifdef USE_GTK4
+	toplevel = gtk_window_new();
+#else
 	toplevel = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+#endif
 	sprintf(name, "ASeqView %d:%d", client, port->index);
 	gtk_widget_set_name(toplevel, name);
 	sprintf(name, "ALSA Sequencer Viewer %d:%d", client, port->index);
 	gtk_window_set_title(GTK_WINDOW(toplevel), name);
+#ifndef USE_GTK4
 	gtk_window_set_wmclass(GTK_WINDOW(toplevel), "aseqview", "ASeqView");
+#endif
+#ifdef USE_GTK4
+	g_signal_connect(G_OBJECT(toplevel), "close-request",
+			G_CALLBACK(quit), NULL);
+#else
 	g_signal_connect(G_OBJECT(toplevel), "delete_event",
 			G_CALLBACK(quit), NULL);
 	g_signal_connect(G_OBJECT(toplevel), "destroy",
 			G_CALLBACK(quit), NULL);
+#endif
 	vbox = gtk_vbox_new(FALSE, 0);
 	w = create_viewer(port);
 	gtk_box_pack_start(GTK_BOX(vbox), w, TRUE, TRUE, 0);
@@ -553,17 +627,29 @@ static void create_port_window(port_status_t *port)
 		gtk_widget_show(hbox);
 	}
 	gtk_widget_show(vbox);
+#ifdef USE_GTK4
+	gtk_window_set_child(GTK_WINDOW(toplevel), vbox);
+#else
 	gtk_container_add(GTK_CONTAINER(toplevel), vbox);
+#endif
 	gtk_widget_show(toplevel);
 }
 
 /*
  */
+#ifdef USE_GTK4
+static gboolean quit(GtkWindow *w, gpointer data)
+{
+	g_main_loop_quit(main_loop);
+	return FALSE;
+}
+#else
 static int quit(GtkWidget *w)
 {
 	gtk_main_quit();
 	return FALSE;
 }
+#endif
 
 /*
  * create viewer widget
@@ -574,8 +660,12 @@ static GtkWidget *create_viewer(port_status_t *port)
 	int i;
 	
 	table = gtk_table_new(aseqview_cols, MIDI_CHANNELS + 1, FALSE);
+#ifdef USE_GTK4
+	gtk_grid_set_column_spacing(GTK_GRID(table), 4);
+#else
 	for (i = 0; i < aseqview_cols - 1; i++)
 		gtk_table_set_col_spacing(GTK_TABLE(table), i, 4);
+#endif
 	create_viewer_titles(table);
 	for (i = 0; i < MIDI_CHANNELS; i++)
 		create_channel_viewer(table, port, i);
@@ -588,7 +678,7 @@ static GtkWidget *create_viewer(port_status_t *port)
 static void create_viewer_titles(GtkWidget *table)
 {
 	GtkWidget *w;
-	GtkTable *tbl = GTK_TABLE(table);
+	GtkTable *tbl = GTK_TABLE(table); /* GtkTable == GtkGrid under GTK4 via typedef */
 	
 	w = gtk_label_new("Ch");
 	gtk_table_attach_defaults(tbl, w, V_CHNUM, V_CHNUM + 1, 0, 1);
@@ -674,9 +764,14 @@ static void create_channel_viewer(GtkWidget *table, port_status_t *st, int ch)
 	w = chst->w_temper_type = gtk_drawing_area_new();
 	gtk_widget_set_size_request(w, tt_width, tt_height);
 	g_object_set_data(G_OBJECT(w), "chst_data", chst);
+#ifdef USE_GTK4
+	gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(w),
+				       draw_temper_type, NULL, NULL);
+#else
 	g_signal_connect(G_OBJECT(w), "draw",
 			G_CALLBACK(draw_temper_type), NULL);
 	gtk_widget_set_events(w, GDK_EXPOSURE_MASK);
+#endif
 	gtk_table_attach_defaults(tbl, w, V_TEMPER, V_TEMPER + 1, top, bottom);
 	gtk_widget_show(w);
 	/* piano */
@@ -730,27 +825,51 @@ static GtkWidget *display_midi_init(GtkWidget *window, midi_status_t *st)
 		st->w_tt_xpm[i] = create_midi_pixmap(tt_bits[i], tt_width, tt_height, 2, tt_rgb[i]);
 	vbox = gtk_vbox_new(FALSE, 0);
 	hbox = gtk_hbox_new(FALSE, 0);
+#ifdef USE_GTK4
+	gtk_widget_set_margin_start(hbox, 10);
+	gtk_widget_set_margin_end(hbox, 10);
+	gtk_widget_set_margin_top(hbox, 10);
+	gtk_widget_set_margin_bottom(hbox, 10);
+#else
 	gtk_container_set_border_width(GTK_CONTAINER(hbox), 10);
+#endif
 	w = st->w_midi_mode = gtk_drawing_area_new();
 	gtk_widget_set_size_request(w, gm_width * 4 + 30, gm_height);
 	g_object_set_data(G_OBJECT(w), "midi_st", st);
+#ifdef USE_GTK4
+	gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(w),
+				       draw_midi_mode, NULL, NULL);
+#else
 	g_signal_connect(G_OBJECT(w), "draw",
 			G_CALLBACK(draw_midi_mode), NULL);
 	gtk_widget_set_events(w, GDK_EXPOSURE_MASK);
+#endif
 	gtk_box_pack_start(GTK_BOX(hbox), w, TRUE, TRUE, 0);
 	gtk_widget_show(w);
 	w = st->w_temper_keysig = gtk_drawing_area_new();
 	gtk_widget_set_size_request(w, tk_width + 10, tk_height);
 	g_object_set_data(G_OBJECT(w), "midi_st", st);
+#ifdef USE_GTK4
+	gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(w),
+				       draw_temper_keysig, NULL, NULL);
+#else
 	g_signal_connect(G_OBJECT(w), "draw",
 			G_CALLBACK(draw_temper_keysig), NULL);
 	gtk_widget_set_events(w, GDK_EXPOSURE_MASK);
+#endif
 	gtk_box_pack_start(GTK_BOX(hbox), w, TRUE, TRUE, 0);
 	gtk_widget_show(w);
 	gtk_box_pack_start(GTK_BOX(vbox), hbox, TRUE, TRUE, 0);
 	gtk_widget_show(hbox);
 	hbox = gtk_hbox_new(FALSE, 0);
+#ifdef USE_GTK4
+	gtk_widget_set_margin_start(hbox, 10);
+	gtk_widget_set_margin_end(hbox, 10);
+	gtk_widget_set_margin_top(hbox, 10);
+	gtk_widget_set_margin_bottom(hbox, 10);
+#else
 	gtk_container_set_border_width(GTK_CONTAINER(hbox), 10);
+#endif
 	w = st->w_time = gtk_label_new("00:00");
 	g_object_set_data(G_OBJECT(w), "midi_st", st);
 	g_timeout_add(1000, update_time, w);
@@ -827,17 +946,14 @@ static cairo_surface_t *create_midi_pixmap(char *data, int width, int height,
 }
 
 /*
+ * draw_midi_mode — shared implementation
  */
-static gboolean draw_midi_mode(GtkWidget *w, cairo_t *cr, gpointer data)
+static void draw_midi_mode_impl(GObject *obj, cairo_t *cr, int width, int height)
 {
 	cairo_surface_t *p;
-	midi_status_t *st = g_object_get_data(G_OBJECT(w), "midi_st");
-	GtkAllocation alloc;
-	int x_ofs, y_ofs;
-
-	gtk_widget_get_allocation(w, &alloc);
-	x_ofs = (alloc.width - gm_width * 4 - 30) / 2;
-	y_ofs = (alloc.height - gm_height) / 2;
+	midi_status_t *st = g_object_get_data(obj, "midi_st");
+	int x_ofs = (width - gm_width * 4 - 30) / 2;
+	int y_ofs = (height - gm_height) / 2;
 
 	p = (st->midi_mode == MIDI_MODE_GM) ? st->w_gm_xpm : st->w_gm_xpm_off;
 	cairo_set_source_surface(cr, p, x_ofs, y_ofs);
@@ -854,46 +970,69 @@ static gboolean draw_midi_mode(GtkWidget *w, cairo_t *cr, gpointer data)
 	p = (st->midi_mode == MIDI_MODE_XG) ? st->w_xg_xpm : st->w_xg_xpm_off;
 	cairo_set_source_surface(cr, p, x_ofs + gm_width * 3 + 30, y_ofs);
 	cairo_paint(cr);
-
-	return FALSE;
 }
 
-/*
- */
-static gboolean draw_temper_keysig(GtkWidget *w, cairo_t *cr, gpointer data)
+#ifdef USE_GTK4
+static void draw_midi_mode(GtkDrawingArea *da, cairo_t *cr, int width, int height,
+			   gpointer data)
 {
-	midi_status_t *st = g_object_get_data(G_OBJECT(w), "midi_st");
+	draw_midi_mode_impl(G_OBJECT(da), cr, width, height);
+}
+#else
+static gboolean draw_midi_mode(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+	GtkAllocation alloc;
+	gtk_widget_get_allocation(w, &alloc);
+	draw_midi_mode_impl(G_OBJECT(w), cr, alloc.width, alloc.height);
+	return FALSE;
+}
+#endif
+
+/*
+ * draw_temper_keysig — shared implementation
+ */
+static void draw_temper_keysig_impl(GObject *obj, cairo_t *cr, int width, int height)
+{
+	midi_status_t *st = g_object_get_data(obj, "midi_st");
 	int tk = st->temper_keysig, i, adj;
 	cairo_surface_t *p;
-	GtkAllocation alloc;
-	int x_ofs, y_ofs;
-
-	gtk_widget_get_allocation(w, &alloc);
-	x_ofs = (alloc.width - tk_width - 10) / 2;
-	y_ofs = (alloc.height - tk_height) / 2;
+	int x_ofs = (width - tk_width - 10) / 2;
+	int y_ofs = (height - tk_height) / 2;
 
 	i = (tk == TEMPER_UNKNOWN) ? 0 : (tk + 8) % 32;
 	adj = (tk == TEMPER_UNKNOWN) ? 0 : (tk + 8) & 0x20;
 	p = (adj) ? st->w_tk_xpm_adj[i] : st->w_tk_xpm[i];
 	cairo_set_source_surface(cr, p, x_ofs, y_ofs);
 	cairo_paint(cr);
-	return FALSE;
 }
 
-/*
- */
-static gboolean draw_temper_type(GtkWidget *w, cairo_t *cr, gpointer data)
+#ifdef USE_GTK4
+static void draw_temper_keysig(GtkDrawingArea *da, cairo_t *cr, int width, int height,
+			       gpointer data)
 {
-	channel_status_t *chst = g_object_get_data(G_OBJECT(w), "chst_data");
+	draw_temper_keysig_impl(G_OBJECT(da), cr, width, height);
+}
+#else
+static gboolean draw_temper_keysig(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+	GtkAllocation alloc;
+	gtk_widget_get_allocation(w, &alloc);
+	draw_temper_keysig_impl(G_OBJECT(w), cr, alloc.width, alloc.height);
+	return FALSE;
+}
+#endif
+
+/*
+ * draw_temper_type — shared implementation
+ */
+static void draw_temper_type_impl(GObject *obj, cairo_t *cr, int width, int height)
+{
+	channel_status_t *chst = g_object_get_data(obj, "chst_data");
 	midi_status_t *st = chst->port->main;
 	int tk = st->temper_keysig, tt = chst->temper_type, i;
 	cairo_surface_t *p;
-	GtkAllocation alloc;
-	int x_ofs, y_ofs;
-
-	gtk_widget_get_allocation(w, &alloc);
-	x_ofs = (alloc.width - tt_width) / 2;
-	y_ofs = (alloc.height - tt_height - 6) / 2;
+	int x_ofs = (width - tt_width) / 2;
+	int y_ofs = (height - tt_height - 6) / 2;
 
 	if ((tt >= 0 && tt < 4) || (tt >= 64 && tt < 68))
 		i = (tk == TEMPER_UNKNOWN) ? 0 : tt - ((tt >= 0x40) ? 0x3c : 0) + 1;
@@ -902,8 +1041,23 @@ static gboolean draw_temper_type(GtkWidget *w, cairo_t *cr, gpointer data)
 	p = st->w_tt_xpm[i];
 	cairo_set_source_surface(cr, p, x_ofs, y_ofs);
 	cairo_paint(cr);
+}
+
+#ifdef USE_GTK4
+static void draw_temper_type(GtkDrawingArea *da, cairo_t *cr, int width, int height,
+			     gpointer data)
+{
+	draw_temper_type_impl(G_OBJECT(da), cr, width, height);
+}
+#else
+static gboolean draw_temper_type(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+	GtkAllocation alloc;
+	gtk_widget_get_allocation(w, &alloc);
+	draw_temper_type_impl(G_OBJECT(w), cr, alloc.width, alloc.height);
 	return FALSE;
 }
+#endif
 
 /*
  */
