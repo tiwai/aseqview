@@ -1,3 +1,5 @@
+0.3.1	- Support of Gtk-4, keeping Gtk-3 as fallback
+
 0.3.0	- Migrate from Gtk-2 to Gtk-3; Gtk-1 and 2 supports are dropped
 
 0.2.9	- Fix crash at piano widget creation
